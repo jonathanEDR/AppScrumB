@@ -3,20 +3,19 @@ const express = require('express');
 const cors = require('cors');  // Middleware para CORS
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
-const dotenv = require('dotenv');
 const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
 const notesRoutes = require('./routes/notes');  // Importa las rutas para las notas
 const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
 
-// Cargar las variables de entorno desde el archivo .env
-dotenv.config();
-
 const app = express();
 const port = process.env.PORT || 5000;  // Usar el puerto de la variable de entorno o el 5000 por defecto
 
+// Leer orígenes de CORS desde .env y convertirlos en array
+const corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+
 // Middleware para CORS y Body Parser
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: corsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
