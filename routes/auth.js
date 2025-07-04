@@ -24,11 +24,11 @@ router.get('/user-profile', authenticate, async (req, res) => {
         permissions: {
           can_create_notes: true,
           can_edit_own_notes: true,
-          can_view_all_notes: ['admin', 'super_admin'].includes(user.role),
-          can_edit_all_notes: ['admin', 'super_admin'].includes(user.role),
-          can_delete_notes: ['admin', 'super_admin'].includes(user.role),
+          can_view_all_notes: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role),
+          can_edit_all_notes: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role),
+          can_delete_notes: ['super_admin', 'product_owner'].includes(user.role),
           can_manage_users: user.role === 'super_admin',
-          can_view_dashboard: ['admin', 'super_admin'].includes(user.role)
+          can_view_dashboard: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role)
         }
       }
     });
@@ -137,11 +137,11 @@ router.post('/verify-session', async (req, res) => {
         permissions: {
           can_create_notes: true,
           can_edit_own_notes: true,
-          can_view_all_notes: ['admin', 'super_admin'].includes(user.role),
-          can_edit_all_notes: ['admin', 'super_admin'].includes(user.role),
-          can_delete_notes: ['admin', 'super_admin'].includes(user.role),
+          can_view_all_notes: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role),
+          can_edit_all_notes: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role),
+          can_delete_notes: ['super_admin', 'product_owner'].includes(user.role),
           can_manage_users: user.role === 'super_admin',
-          can_view_dashboard: ['admin', 'super_admin'].includes(user.role)
+          can_view_dashboard: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role)
         }
       }
     });
@@ -199,18 +199,18 @@ router.put('/update-profile/:userId', authenticate, async (req, res) => {
     // Verificar permisos
     if (currentUser.role !== 'super_admin') {
       // Si no es super_admin, verificar restricciones adicionales
-      if (currentUser.role === 'admin') {
-        // Los admin solo pueden editar usuarios normales
-        if (targetUser.role !== 'user') {
-          return res.status(403).json({ 
-            message: 'No tienes permisos para editar este usuario' 
+      if (currentUser.role === 'product_owner' || currentUser.role === 'scrum_master') {
+        // Product Owner y Scrum Master solo pueden editar developers y users
+        if (!['developers', 'user'].includes(targetUser.role)) {
+          return res.status(403).json({
+            message: 'No tienes permisos para editar este usuario'
           });
         }
-      } else {
-        // Usuarios normales solo pueden editar su propio perfil
+      } else if (currentUser.role === 'developers' || currentUser.role === 'user') {
+        // Developers y users solo pueden editar su propio perfil
         if (targetUser._id.toString() !== currentUser._id.toString()) {
-          return res.status(403).json({ 
-            message: 'Solo puedes editar tu propio perfil' 
+          return res.status(403).json({
+            message: 'Solo puedes editar tu propio perfil'
           });
         }
       }
@@ -239,17 +239,25 @@ router.put('/update-profile/:userId', authenticate, async (req, res) => {
 // Ruta para obtener información básica de roles (para el frontend)
 router.get('/roles-info', authenticate, (req, res) => {
   const rolesInfo = {
+    super_admin: {
+      name: 'Super Admin',
+      permissions: ['todos_permisos', 'gestionar_usuarios', 'asignar_roles', 'ver_estadisticas', 'ver_dashboard', 'crear_notas', 'editar_todas_notas', 'eliminar_notas']
+    },
+    product_owner: {
+      name: 'Product Owner',
+      permissions: ['ver_dashboard', 'crear_notas', 'editar_todas_notas', 'eliminar_notas', 'ver_todas_notas']
+    },
+    scrum_master: {
+      name: 'Scrum Master',
+      permissions: ['ver_dashboard', 'crear_notas', 'editar_todas_notas', 'ver_todas_notas']
+    },
+    developers: {
+      name: 'Developers',
+      permissions: ['crear_notas', 'editar_propias_notas', 'ver_propias_notas']
+    },
     user: {
       name: 'Usuario',
       permissions: ['crear_notas', 'editar_propias_notas', 'ver_propias_notas']
-    },
-    admin: {
-      name: 'Administrador',
-      permissions: ['crear_notas', 'editar_todas_notas', 'ver_todas_notas', 'eliminar_notas', 'ver_dashboard']
-    },
-    super_admin: {
-      name: 'Super Administrador',
-      permissions: ['todos_permisos', 'gestionar_usuarios', 'asignar_roles', 'ver_estadisticas']
     }
   };
 

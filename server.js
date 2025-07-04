@@ -4,8 +4,8 @@ const cors = require('cors');  // Middleware para CORS
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
-const notesRoutes = require('./routes/notes');  // Importa las rutas para las notas
 const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
+
 
 const app = express();
 const port = process.env.PORT || 5000;  // Usar el puerto de la variable de entorno o el 5000 por defecto
@@ -24,7 +24,6 @@ app.use(bodyParser.json());// Analizar solicitudes con cuerpo JSON
 
 // Usar las rutas de autenticación
 app.use('/api/auth', authRoutes);
-app.use('/api/notes', notesRoutes); 
 app.use('/api/admin', adminRoutes);  // Añade las rutas de admin
 
 // Rutas de prueba y health check

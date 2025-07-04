@@ -4,10 +4,10 @@ const userSchema = new mongoose.Schema({
   clerk_id: { type: String, required: true, unique: true }, // ID de Clerk
   nombre_negocio: { type: String, required: false }, // Hacemos este campo opcional
   email: { type: String, required: true, unique: true },
-  role: { 
-    type: String, 
-    enum: ['user', 'admin', 'super_admin'], 
-    default: 'user' 
+  role: {
+    type: String,
+    enum: ['super_admin', 'product_owner', 'scrum_master', 'developers', 'user'],
+    default: 'user'
   }, // Sistema de roles
   fecha_creacion: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
