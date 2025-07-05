@@ -5,6 +5,11 @@ const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
 const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
+const productsRoutes = require('./routes/products');  // Rutas de productos
+const backlogRoutes = require('./routes/backlog');  // Rutas de backlog
+const releasesRoutes = require('./routes/releases');  // Rutas de releases
+const sprintsRoutes = require('./routes/sprints');  // Rutas de sprints
+const metricasRoutes = require('./routes/metricas');  // Rutas de métricas
 
 
 const app = express();
@@ -25,6 +30,11 @@ app.use(bodyParser.json());// Analizar solicitudes con cuerpo JSON
 // Usar las rutas de autenticación
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);  // Añade las rutas de admin
+app.use('/api', productsRoutes);  // Rutas de productos
+app.use('/api', backlogRoutes);  // Rutas de backlog
+app.use('/api/releases', releasesRoutes);  // Rutas de releases
+app.use('/api/sprints', sprintsRoutes);  // Rutas de sprints
+app.use('/api/metricas', metricasRoutes);  // Rutas de métricas
 
 // Rutas de prueba y health check
 app.get('/', (req, res) => {
