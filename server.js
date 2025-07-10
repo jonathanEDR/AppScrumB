@@ -9,7 +9,10 @@ const productsRoutes = require('./routes/products');  // Rutas de productos
 const backlogRoutes = require('./routes/backlog');  // Rutas de backlog
 const releasesRoutes = require('./routes/releases');  // Rutas de releases
 const sprintsRoutes = require('./routes/sprints');  // Rutas de sprints
-const metricasRoutes = require('./routes/metricas');  // Rutas de métricas
+const metricasRoutes = require('./routes/metrics');  // Rutas de métricas
+const impedimentsRoutes = require('./routes/impediments');  // Rutas de impedimentos
+const ceremoniesRoutes = require('./routes/ceremonies');  // Rutas de ceremonias
+const teamRoutes = require('./routes/team');  // Rutas de equipo
 
 
 const app = express();
@@ -35,6 +38,9 @@ app.use('/api', backlogRoutes);  // Rutas de backlog
 app.use('/api/releases', releasesRoutes);  // Rutas de releases
 app.use('/api/sprints', sprintsRoutes);  // Rutas de sprints
 app.use('/api/metricas', metricasRoutes);  // Rutas de métricas
+app.use('/api/impediments', impedimentsRoutes);  // Rutas de impedimentos
+app.use('/api/ceremonies', ceremoniesRoutes);  // Rutas de ceremonias
+app.use('/api/team', teamRoutes);  // Rutas de equipo
 
 // Rutas de prueba y health check
 app.get('/', (req, res) => {

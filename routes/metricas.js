@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const { authenticate } = require('../middleware/authenticate');
 const Sprint = require('../models/Sprint');
-const BacklogItem = require('../models/BacklogItem');
-const Release = require('../models/Release');
-const Product = require('../models/Product');
+const Task = require('../models/Task');
+const TeamMember = require('../models/TeamMember');
+const Impediment = require('../models/Impediment');
+const Ceremony = require('../models/Ceremony');
 
 // GET /api/metricas/dashboard/:producto_id - Dashboard de métricas principales
 router.get('/dashboard/:producto_id', async (req, res) => {
