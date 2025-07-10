@@ -13,6 +13,10 @@ const metricasRoutes = require('./routes/metrics');  // Rutas de métricas
 const impedimentsRoutes = require('./routes/impediments');  // Rutas de impedimentos
 const ceremoniesRoutes = require('./routes/ceremonies');  // Rutas de ceremonias
 const teamRoutes = require('./routes/team');  // Rutas de equipo
+const developersRoutes = require('./routes/developers');  // Rutas de developers
+const timeTrackingRoutes = require('./routes/timeTracking');  // Rutas de time tracking
+const bugReportsRoutes = require('./routes/bugReports');  // Rutas de bug reports
+const usersRoutes = require('./routes/users');  // Rutas de usuarios
 
 
 const app = express();
@@ -41,6 +45,10 @@ app.use('/api/metricas', metricasRoutes);  // Rutas de métricas
 app.use('/api/impediments', impedimentsRoutes);  // Rutas de impedimentos
 app.use('/api/ceremonies', ceremoniesRoutes);  // Rutas de ceremonias
 app.use('/api/team', teamRoutes);  // Rutas de equipo
+app.use('/api/developers', developersRoutes);  // Rutas de developers
+app.use('/api/time-tracking', timeTrackingRoutes);  // Rutas de time tracking
+app.use('/api/bug-reports', bugReportsRoutes);  // Rutas de bug reports
+app.use('/api/users', usersRoutes);  // Rutas de usuarios
 
 // Rutas de prueba y health check
 app.get('/', (req, res) => {

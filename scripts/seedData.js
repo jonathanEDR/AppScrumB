@@ -15,6 +15,17 @@ const seedData = async () => {
     console.log('Limpiando datos existentes...');
     await Impediment.deleteMany({});
     await Ceremony.deleteMany({});
+    
+    // Limpiar datos del módulo de developers
+    const Task = require('../models/Task');
+    const TimeTracking = require('../models/TimeTracking');
+    const BugReport = require('../models/BugReport');
+    const Sprint = require('../models/Sprint');
+    
+    await Task.deleteMany({});
+    await TimeTracking.deleteMany({});
+    await BugReport.deleteMany({});
+    await Sprint.deleteMany({});
 
     // Crear usuarios de ejemplo (si no existen)
     let scrumMaster = await User.findOne({ email: 'scrummaster@example.com' });
@@ -156,9 +167,247 @@ const seedData = async () => {
     await Ceremony.insertMany(ceremonies);
     console.log('Ceremonias creadas exitosamente');
 
+    // Crear Producto de ejemplo
+    const Product = require('../models/Product');
+    let product = await Product.findOne({ nombre: 'AppScrum Demo' });
+    if (!product) {
+      product = new Product({
+        nombre: 'AppScrum Demo',
+        descripcion: 'Aplicación de gestión Scrum para demostración',
+        responsable: scrumMaster._id,
+        estado: 'activo',
+        fecha_inicio: new Date('2025-01-01'),
+        created_by: scrumMaster._id
+      });
+      await product.save();
+    }
+    console.log('Producto creado exitosamente');
+
+    // Crear Sprint de ejemplo
+    const sprint = new Sprint({
+      nombre: 'Sprint 2025-01',
+      objetivo: 'Implementar sistema de autenticación y mejoras de rendimiento',
+      fecha_inicio: new Date('2025-01-01'),
+      fecha_fin: new Date('2025-01-14'),
+      estado: 'activo',
+      producto: product._id,
+      velocidad_planificada: 80,
+      velocidad_real: 65,
+      created_by: scrumMaster._id
+    });
+    await sprint.save();
+    console.log('Sprint creado exitosamente');
+
+    // Crear tareas de ejemplo
+    const taskIds = [];
+    const tasks = [
+      {
+        title: 'Implementar autenticación JWT',
+        description: 'Desarrollar sistema de autenticación usando JSON Web Tokens',
+        type: 'story',
+        status: 'in_progress',
+        priority: 'high',
+        storyPoints: 8,
+        estimatedHours: 16,
+        actualHours: 10,
+        assignee: developer1._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        createdBy: scrumMaster._id
+      },
+      {
+        title: 'Corregir bug en validación',
+        description: 'Solucionar problema de validación en formularios',
+        type: 'bug',
+        status: 'todo',
+        priority: 'medium',
+        storyPoints: 3,
+        estimatedHours: 6,
+        assignee: developer1._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        createdBy: scrumMaster._id
+      },
+      {
+        title: 'Optimizar consultas DB',
+        description: 'Mejorar rendimiento de consultas a la base de datos',
+        type: 'task',
+        status: 'done',
+        priority: 'low',
+        storyPoints: 5,
+        estimatedHours: 12,
+        actualHours: 8,
+        assignee: developer1._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        completedAt: new Date(),
+        createdBy: scrumMaster._id
+      },
+      {
+        title: 'Tests unitarios',
+        description: 'Escribir tests unitarios para módulo de autenticación',
+        type: 'task',
+        status: 'in_progress',
+        priority: 'high',
+        storyPoints: 13,
+        estimatedHours: 24,
+        actualHours: 15,
+        assignee: developer1._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        createdBy: scrumMaster._id
+      },
+      {
+        title: 'Diseño de componentes',
+        description: 'Crear componentes UI para el dashboard',
+        type: 'story',
+        status: 'todo',
+        priority: 'medium',
+        storyPoints: 5,
+        estimatedHours: 10,
+        assignee: developer2._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        createdBy: scrumMaster._id
+      },
+      {
+        title: 'Integración API externa',
+        description: 'Conectar con API de terceros',
+        type: 'story',
+        status: 'in_progress',
+        priority: 'high',
+        storyPoints: 8,
+        estimatedHours: 16,
+        actualHours: 6,
+        assignee: developer2._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        createdBy: scrumMaster._id
+      },
+      {
+        title: 'Documentación técnica',
+        description: 'Escribir documentación del API',
+        type: 'task',
+        status: 'done',
+        priority: 'low',
+        storyPoints: 3,
+        estimatedHours: 8,
+        actualHours: 6,
+        assignee: developer2._id,
+        reporter: scrumMaster._id,
+        sprint: sprint._id,
+        completedAt: new Date(Date.now() - 86400000), // Ayer
+        createdBy: scrumMaster._id
+      }
+    ];
+
+    const insertedTasks = await Task.insertMany(tasks);
+    console.log('Tareas creadas exitosamente');
+
+    // Crear registros de time tracking
+    const timeTrackingEntries = [
+      {
+        user: developer1._id,
+        task: insertedTasks[0]._id,
+        startTime: new Date(Date.now() - 4 * 60 * 60 * 1000), // 4 horas atrás
+        endTime: new Date(),
+        duration: 240, // 4 horas en minutos
+        hours: 4,
+        description: 'Investigación sobre JWT y configuración inicial',
+        date: new Date(),
+        category: 'development'
+      },
+      {
+        user: developer1._id,
+        task: insertedTasks[0]._id,
+        startTime: new Date(Date.now() - 86400000 - 6 * 60 * 60 * 1000), // Ayer, 6 horas
+        endTime: new Date(Date.now() - 86400000),
+        duration: 360, // 6 horas en minutos
+        hours: 6,
+        description: 'Implementación del middleware de autenticación',
+        date: new Date(Date.now() - 86400000), // Ayer
+        category: 'development'
+      },
+      {
+        user: developer1._id,
+        task: insertedTasks[3]._id,
+        startTime: new Date(Date.now() - 3 * 60 * 60 * 1000), // 3 horas atrás
+        endTime: new Date(),
+        duration: 180, // 3 horas en minutos
+        hours: 3,
+        description: 'Setup de testing framework',
+        date: new Date(),
+        category: 'testing'
+      },
+      {
+        user: developer2._id,
+        task: insertedTasks[5]._id,
+        startTime: new Date(Date.now() - 6 * 60 * 60 * 1000), // 6 horas atrás
+        endTime: new Date(),
+        duration: 360, // 6 horas en minutos
+        hours: 6,
+        description: 'Configuración inicial de API externa',
+        date: new Date(),
+        category: 'development'
+      }
+    ];
+
+    await TimeTracking.insertMany(timeTrackingEntries);
+    console.log('Registros de time tracking creados exitosamente');
+
+    // Crear reportes de bugs
+    const bugReports = [
+      {
+        title: 'Error en login con credenciales especiales',
+        description: 'El sistema falla cuando el usuario tiene caracteres especiales en la contraseña',
+        severity: 'major',
+        priority: 'high',
+        status: 'open',
+        category: 'authentication',
+        stepsToReproduce: 'Ir a la página de login\nIngresar email válido\nIngresar contraseña con caracteres especiales (@#$%)\nHacer click en "Iniciar Sesión"',
+        expectedBehavior: 'El usuario debería poder iniciar sesión correctamente',
+        actualBehavior: 'Se muestra error 500 y el usuario no puede ingresar',
+        environment: {
+          browser: 'Chrome 120.0',
+          os: 'Windows 11',
+          device: 'Desktop'
+        },
+        reportedBy: developer2._id,
+        assignedTo: developer1._id,
+        tags: ['login', 'authentication', 'special-characters']
+      },
+      {
+        title: 'Dashboard no carga en móviles',
+        description: 'El dashboard principal no se renderiza correctamente en dispositivos móviles',
+        severity: 'major',
+        priority: 'medium',
+        status: 'in_progress',
+        category: 'ui',
+        stepsToReproduce: 'Abrir la aplicación en un dispositivo móvil\nIniciar sesión correctamente\nNavegar al dashboard',
+        expectedBehavior: 'El dashboard debería mostrarse responsive',
+        actualBehavior: 'Los elementos se superponen y no es usable',
+        environment: {
+          browser: 'Safari Mobile',
+          os: 'iOS 17',
+          device: 'iPhone 14'
+        },
+        reportedBy: developer1._id,
+        assignedTo: developer2._id,
+        tags: ['responsive', 'mobile', 'dashboard']
+      }
+    ];
+
+    await BugReport.insertMany(bugReports);
+    console.log('Reportes de bugs creados exitosamente');
+
     console.log('Datos de ejemplo creados exitosamente');
     console.log(`- ${impediments.length} impedimentos`);
     console.log(`- ${ceremonies.length} ceremonias`);
+    console.log(`- 1 producto`);
+    console.log(`- 1 sprint activo`);
+    console.log(`- ${insertedTasks.length} tareas`);
+    console.log(`- ${timeTrackingEntries.length} registros de time tracking`);
+    console.log(`- ${bugReports.length} reportes de bugs`);
 
   } catch (error) {
     console.error('Error al crear datos de ejemplo:', error);

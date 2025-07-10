@@ -49,7 +49,9 @@ const authenticate = async (req, res, next) => {
 
     if (!user.is_active) {
       return res.status(401).json({ message: 'Usuario desactivado' });
-    }    // Add user object to request
+    }
+    
+    // Add user object to request
     req.user = {
       _id: user._id,  // Importante: usar _id en lugar de id
       id: user._id,   // Mantener id por compatibilidad
