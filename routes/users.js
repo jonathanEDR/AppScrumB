@@ -12,26 +12,26 @@ router.get('/dashboard/:userId', authenticate, async (req, res) => {
   try {
     const { userId } = req.params;
     
-    // Verificar que el usuario existe
-    const user = await User.findById(userId);
+    // Verificar que el usuario existe (buscar por clerk_id)
+    const user = await User.findOne({ clerk_id: userId });
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
-    // Buscar TeamMember asociado al usuario
-    const teamMember = await TeamMember.findOne({ user: userId });
+    // Buscar TeamMember asociado al usuario (usar el _id de MongoDB)
+    const teamMember = await TeamMember.findOne({ user: user._id });
     
     // Obtener proyectos donde el usuario es responsable o miembro del equipo
     let projectsQuery = {};
     if (teamMember) {
       projectsQuery = {
         $or: [
-          { responsable: userId },
+          { responsable: user._id },
           { 'equipo': teamMember._id }
         ]
       };
     } else {
-      projectsQuery = { responsable: userId };
+      projectsQuery = { responsable: user._id };
     }
 
     const projects = await Product.find(projectsQuery)
@@ -57,7 +57,7 @@ router.get('/dashboard/:userId', authenticate, async (req, res) => {
     endOfWeek.setHours(23, 59, 59, 999);
 
     const currentWeekTracking = await TimeTracking.find({
-      user: userId,
+      user: user._id,
       startTime: { $gte: startOfWeek, $lte: endOfWeek }
     });
 
@@ -73,7 +73,7 @@ router.get('/dashboard/:userId', authenticate, async (req, res) => {
     endOfLastWeek.setMilliseconds(endOfLastWeek.getMilliseconds() - 1);
 
     const lastWeekTracking = await TimeTracking.find({
-      user: userId,
+      user: user._id,
       startTime: { $gte: startOfLastWeek, $lte: endOfLastWeek }
     });
 
@@ -171,20 +171,26 @@ router.get('/projects/:userId', authenticate, async (req, res) => {
   try {
     const { userId } = req.params;
     
+    // Buscar el usuario por clerk_id
+    const user = await User.findOne({ clerk_id: userId });
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    
     // Buscar TeamMember asociado al usuario
-    const teamMember = await TeamMember.findOne({ user: userId });
+    const teamMember = await TeamMember.findOne({ user: user._id });
     
     // Obtener proyectos donde el usuario es responsable o miembro del equipo
     let projectsQuery = {};
     if (teamMember) {
       projectsQuery = {
         $or: [
-          { responsable: userId },
+          { responsable: user._id },
           { 'equipo': teamMember._id }
         ]
       };
     } else {
-      projectsQuery = { responsable: userId };
+      projectsQuery = { responsable: user._id };
     }
 
     const projects = await Product.find(projectsQuery)
@@ -230,8 +236,14 @@ router.get('/activities/:userId', authenticate, async (req, res) => {
     const { userId } = req.params;
     const { page = 1, limit = 10 } = req.query;
     
+    // Buscar el usuario por clerk_id
+    const user = await User.findOne({ clerk_id: userId });
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    
     // Buscar TeamMember asociado al usuario
-    const teamMember = await TeamMember.findOne({ user: userId });
+    const teamMember = await TeamMember.findOne({ user: user._id });
     
     if (!teamMember) {
       return res.json({
@@ -291,13 +303,13 @@ router.get('/profile/:userId', authenticate, async (req, res) => {
   try {
     const { userId } = req.params;
     
-    const user = await User.findById(userId).select('-__v');
+    const user = await User.findOne({ clerk_id: userId }).select('-__v');
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
     // Buscar información adicional del TeamMember si existe
-    const teamMember = await TeamMember.findOne({ user: userId })
+    const teamMember = await TeamMember.findOne({ user: user._id })
       .populate('team', 'name')
       .lean();
 
@@ -334,7 +346,7 @@ router.put('/profile/:userId', authenticate, async (req, res) => {
     const { nombre_negocio, ...otherFields } = req.body;
 
     // Validar que el usuario existe
-    const user = await User.findById(userId);
+    const user = await User.findOne({ clerk_id: userId });
     if (!user) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -344,7 +356,7 @@ router.put('/profile/:userId', authenticate, async (req, res) => {
     if (nombre_negocio !== undefined) updateFields.nombre_negocio = nombre_negocio;
 
     const updatedUser = await User.findByIdAndUpdate(
-      userId,
+      user._id,
       updateFields,
       { new: true, runValidators: true }
     ).select('-__v');
