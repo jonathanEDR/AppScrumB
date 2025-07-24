@@ -80,6 +80,200 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// POST /api/sprints/:id/assign-story - Asignar historia a sprint
+router.post('/:id/assign-story', authenticate, async (req, res) => {
+  try {
+    console.log('=== Assigning story to sprint ===');
+    console.log('Sprint ID:', req.params.id);
+    console.log('Story data:', req.body);
+    
+    const { storyId, assignedTo } = req.body;
+    
+    if (!storyId) {
+      return res.status(400).json({ error: 'ID de historia requerido' });
+    }
+
+    // Verificar que el sprint existe y está en estado planificado o activo
+    const sprint = await Sprint.findById(req.params.id);
+    if (!sprint) {
+      return res.status(404).json({ error: 'Sprint no encontrado' });
+    }
+
+    if (!['planificado', 'activo'].includes(sprint.estado)) {
+      return res.status(400).json({ 
+        error: 'Solo se pueden asignar historias a sprints planificados o activos' 
+      });
+    }
+
+    // Verificar que la historia existe y no está asignada a otro sprint
+    const story = await BacklogItem.findById(storyId);
+    if (!story) {
+      return res.status(404).json({ error: 'Historia no encontrada' });
+    }
+
+    if (story.sprint && story.sprint.toString() !== req.params.id) {
+      return res.status(400).json({ 
+        error: 'La historia ya está asignada a otro sprint' 
+      });
+    }
+
+    // Asignar la historia al sprint
+    const updateData = { sprint: req.params.id };
+    if (assignedTo) {
+      updateData.asignado_a = assignedTo;
+    }
+
+    const updatedStory = await BacklogItem.findByIdAndUpdate(
+      storyId,
+      updateData,
+      { new: true }
+    ).populate('asignado_a', 'firstName lastName email');
+
+    console.log('Story assigned successfully:', updatedStory.titulo);
+
+    res.json({
+      message: 'Historia asignada al sprint exitosamente',
+      story: updatedStory
+    });
+
+  } catch (error) {
+    console.error('Error al asignar historia:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// DELETE /api/sprints/:id/stories/:storyId - Desasignar historia del sprint
+router.delete('/:id/stories/:storyId', authenticate, async (req, res) => {
+  try {
+    console.log('=== Unassigning story from sprint ===');
+    console.log('Sprint ID:', req.params.id);
+    console.log('Story ID:', req.params.storyId);
+    
+    // Verificar que el sprint existe
+    const sprint = await Sprint.findById(req.params.id);
+    if (!sprint) {
+      return res.status(404).json({ error: 'Sprint no encontrado' });
+    }
+
+    // Verificar que la historia existe y está asignada a este sprint
+    const story = await BacklogItem.findById(req.params.storyId);
+    if (!story) {
+      return res.status(404).json({ error: 'Historia no encontrada' });
+    }
+
+    if (!story.sprint || story.sprint.toString() !== req.params.id) {
+      return res.status(400).json({ 
+        error: 'La historia no está asignada a este sprint' 
+      });
+    }
+
+    // Solo permitir desasignación si el sprint no está completado
+    if (sprint.estado === 'completado') {
+      return res.status(400).json({ 
+        error: 'No se pueden desasignar historias de sprints completados' 
+      });
+    }
+
+    // Desasignar la historia del sprint
+    const updatedStory = await BacklogItem.findByIdAndUpdate(
+      req.params.storyId,
+      { 
+        $unset: { sprint: 1 },
+        estado: 'pendiente' // Resetear estado a pendiente
+      },
+      { new: true }
+    );
+
+    console.log('Story unassigned successfully:', updatedStory.titulo);
+
+    res.json({
+      message: 'Historia desasignada del sprint exitosamente',
+      story: updatedStory
+    });
+
+  } catch (error) {
+    console.error('Error al desasignar historia:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// GET /api/sprints/:id/available-stories - Obtener historias disponibles para asignar
+router.get('/:id/available-stories', authenticate, async (req, res) => {
+  try {
+    console.log('=== Getting available stories for sprint ===');
+    console.log('Sprint ID:', req.params.id);
+    
+    const { prioridad, tipo, producto } = req.query;
+    
+    // Verificar que el sprint existe
+    const sprint = await Sprint.findById(req.params.id);
+    if (!sprint) {
+      return res.status(404).json({ error: 'Sprint no encontrado' });
+    }
+
+    console.log('Sprint found:', sprint.nombre);
+
+    // Primero, obtener TODAS las historias del backlog para debug
+    const allBacklogItems = await BacklogItem.find({})
+      .populate('producto', 'nombre')
+      .select('titulo sprint estado producto');
+    
+    console.log('=== ALL BACKLOG ITEMS DEBUG ===');
+    console.log('Total backlog items:', allBacklogItems.length);
+    allBacklogItems.forEach(item => {
+      console.log(`- ${item.titulo}: sprint=${item.sprint}, estado=${item.estado}, producto=${item.producto?.nombre}`);
+    });
+
+    // Construir filtros para historias disponibles
+    const filtros = {
+      $or: [
+        { sprint: { $exists: false } }, // Sin campo sprint
+        { sprint: null }                // Sprint es null
+      ],
+      estado: { $in: ['pendiente', 'en_progreso'] } // Estados válidos
+    };
+
+    // Si el sprint tiene producto específico, filtrar por ese producto
+    if (sprint.producto) {
+      filtros.producto = sprint.producto;
+      console.log('Filtering by sprint product:', sprint.producto);
+    }
+
+    // Aplicar filtros adicionales si se proporcionan
+    if (prioridad) filtros.prioridad = prioridad;
+    if (tipo) filtros.tipo = tipo;
+    if (producto) filtros.producto = producto;
+
+    const availableStories = await BacklogItem.find(filtros)
+      .populate('producto', 'nombre')
+      .populate('asignado_a', 'firstName lastName email')
+      .sort({ prioridad: 1, orden: 1 }); // Ordenar por prioridad y orden
+
+    console.log('Filtros aplicados:', JSON.stringify(filtros, null, 2));
+    console.log('Available stories found:', availableStories.length);
+    console.log('Sample stories:', availableStories.slice(0, 2).map(s => ({
+      _id: s._id,
+      titulo: s.titulo,
+      sprint: s.sprint,
+      estado: s.estado,
+      producto: s.producto?._id
+    })));
+
+    res.json({
+      stories: availableStories,
+      sprint: {
+        _id: sprint._id,
+        nombre: sprint.nombre,
+        estado: sprint.estado
+      }
+    });
+
+  } catch (error) {
+    console.error('Error al obtener historias disponibles:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
 // POST /api/sprints - Crear nuevo sprint
 router.post('/', authenticate, async (req, res) => {
   try {

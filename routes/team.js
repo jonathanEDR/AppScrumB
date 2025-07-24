@@ -44,44 +44,89 @@ router.get('/members', authenticate, async (req, res) => {
     if (role) filters.role = role;
     
     let teamMembers = await TeamMember.find(filters)
-      .populate('user', 'firstName lastName email avatar')
+      .populate('user', 'firstName lastName email avatar nombre_negocio')
       .populate('currentSprint', 'name startDate endDate status')
       .sort({ role: 1, 'user.firstName': 1 });
     
     // Si no hay miembros del equipo, crear datos de demostración basados en usuarios existentes
     if (teamMembers.length === 0) {
-      const users = await User.find({ is_active: true }).limit(10);
+      console.log('No se encontraron TeamMembers, generando datos demo basados en Users...');
       
-      teamMembers = users.map(user => ({
-        _id: new mongoose.Types.ObjectId(),
-        user: {
-          firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
-          lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
-          email: user.email,
-          avatar: null
-        },
-        team: 'default',
-        role: user.role,
-        status: user.is_active ? 'active' : 'inactive',
-        availability: Math.floor(Math.random() * 40) + 60, // 60-100%
-        skills: [
-          { name: 'JavaScript', level: 'intermediate' },
-          { name: 'React', level: 'advanced' }
-        ],
-        workload: {
-          currentStoryPoints: Math.floor(Math.random() * 20) + 5,
-          maxStoryPoints: 24,
-          currentHours: Math.floor(Math.random() * 35) + 15,
-          maxHours: 40
-        },
-        createdAt: new Date(),
-        updatedAt: new Date()
-      }));
+      const users = await User.find({ is_active: true }).limit(10);
+      console.log(`Encontrados ${users.length} usuarios activos para generar datos demo`);
+      
+      const roles = ['developer', 'tester', 'designer', 'scrum_master', 'product_owner'];
+      
+      teamMembers = users.map((user, index) => {
+        const selectedRole = user.role === 'user' ? roles[index % roles.length] : user.role;
+        
+        return {
+          _id: new mongoose.Types.ObjectId(),
+          user: {
+            _id: user._id,
+            firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
+            lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
+            email: user.email,
+            avatar: null,
+            nombre_negocio: user.nombre_negocio
+          },
+          team: 'default',
+          role: selectedRole,
+          status: user.is_active ? 'active' : 'inactive',
+          availability: Math.floor(Math.random() * 40) + 60, // 60-100%
+          skills: [
+            { name: 'JavaScript', level: 'intermediate' },
+            { name: 'React', level: 'advanced' },
+            { name: selectedRole === 'developer' ? 'Node.js' : 'Testing', level: 'intermediate' }
+          ],
+          workload: {
+            currentStoryPoints: Math.floor(Math.random() * 15) + 5, // 5-20 puntos
+            maxStoryPoints: 24,
+            hoursWorked: Math.floor(Math.random() * 25) + 15, // 15-40 horas
+            maxHours: 40
+          },
+          performance: {
+            velocityAverage: Math.floor(Math.random() * 10) + 15, // 15-25
+            completionRate: Math.floor(Math.random() * 30) + 70, // 70-100%
+            qualityScore: Math.floor(Math.random() * 20) + 80 // 80-100%
+          },
+          currentSprint: null,
+          joinedDate: new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000), // Último año
+          lastActiveDate: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000), // Última semana
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+      });
+      
+      console.log(`Generados ${teamMembers.length} miembros demo del equipo`);
     }
     
+    // Enriquecer datos con información calculada
+    const enrichedMembers = teamMembers.map(member => {
+      const workloadPercentage = member.workload?.maxStoryPoints > 0 
+        ? Math.round((member.workload.currentStoryPoints / member.workload.maxStoryPoints) * 100)
+        : 0;
+      
+      return {
+        ...member.toObject ? member.toObject() : member,
+        workloadPercentage,
+        capacityRemaining: Math.max(0, (member.workload?.maxStoryPoints || 24) - (member.workload?.currentStoryPoints || 0)),
+        isOverloaded: workloadPercentage > 100
+      };
+    });
+    
     res.json({
-      members: teamMembers,
-      total: teamMembers.length
+      members: enrichedMembers,
+      total: enrichedMembers.length,
+      summary: {
+        active: enrichedMembers.filter(m => m.status === 'active').length,
+        busy: enrichedMembers.filter(m => m.status === 'busy').length,
+        inactive: enrichedMembers.filter(m => m.status === 'inactive').length,
+        overloaded: enrichedMembers.filter(m => m.isOverloaded).length,
+        averageWorkload: enrichedMembers.length > 0 
+          ? Math.round(enrichedMembers.reduce((sum, m) => sum + (m.workloadPercentage || 0), 0) / enrichedMembers.length)
+          : 0
+      }
     });
   } catch (error) {
     console.error('Error al obtener miembros del equipo:', error);

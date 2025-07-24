@@ -48,6 +48,22 @@ const BacklogItemSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Sprint'
   },
+  historia_padre: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'BacklogItem',
+    default: null,
+    validate: {
+      validator: function(value) {
+        // Solo items técnicos pueden tener historia padre
+        if (value && !['tarea', 'bug', 'mejora'].includes(this.tipo)) {
+          return false;
+        }
+        // Si tiene historia padre, debe ser del mismo sprint
+        return true;
+      },
+      message: 'Solo tareas, bugs y mejoras pueden tener historia padre'
+    }
+  },
   etiquetas: [{
     type: String,
     trim: true
@@ -81,5 +97,6 @@ BacklogItemSchema.index({ titulo: 'text', descripcion: 'text' });
 BacklogItemSchema.index({ estado: 1 });
 BacklogItemSchema.index({ prioridad: 1 });
 BacklogItemSchema.index({ sprint: 1 });
+BacklogItemSchema.index({ historia_padre: 1 });
 
 module.exports = mongoose.models.BacklogItem || mongoose.model('BacklogItem', BacklogItemSchema);
