@@ -14,6 +14,80 @@ const requireProductOwnerOrAbove = authorize('product_owner', 'super_admin');
 
 // ============= RUTAS DE PRODUCTOS =============
 
+// Ruta temporal sin autenticación para productos (para testing)
+router.get('/productos-demo', async (req, res) => {
+  try {
+    console.log('🔍 DEBUG: Obteniendo productos demo');
+    
+    // Crear productos simulados para testing
+    const productos = [
+      {
+        _id: '507f1f77bcf86cd799439011',
+        nombre: 'Producto Demo 1',
+        descripcion: 'Sistema de gestión de inventario empresarial con módulos de compras, ventas y reportes avanzados',
+        responsable: {
+          _id: '507f1f77bcf86cd799439012',
+          nombre_negocio: 'Juan Pérez',
+          email: 'juan.perez@empresa.com'
+        },
+        estado: 'activo',
+        prioridad: 'alta',
+        fecha_inicio: '2024-01-15',
+        fecha_fin: '2025-12-31',
+        createdAt: new Date('2024-01-15'),
+        updatedAt: new Date()
+      },
+      {
+        _id: '507f1f77bcf86cd799439013',
+        nombre: 'Producto Demo 2', 
+        descripcion: 'Plataforma de e-commerce móvil con integración de pagos y gestión de inventario',
+        responsable: {
+          _id: '507f1f77bcf86cd799439014',
+          nombre_negocio: 'María García',
+          email: 'maria.garcia@empresa.com'
+        },
+        estado: 'activo',
+        prioridad: 'media',
+        fecha_inicio: '2024-03-01',
+        fecha_fin: '2025-06-30',
+        createdAt: new Date('2024-03-01'),
+        updatedAt: new Date()
+      },
+      {
+        _id: '507f1f77bcf86cd799439015',
+        nombre: 'Producto Demo 3',
+        descripcion: 'Sistema de recursos humanos integrado con nómina, evaluaciones y gestión de talento',
+        responsable: {
+          _id: '507f1f77bcf86cd799439016',
+          nombre_negocio: 'Carlos López',
+          email: 'carlos.lopez@empresa.com'
+        },
+        estado: 'completado',
+        prioridad: 'baja',
+        fecha_inicio: '2024-01-01',
+        fecha_fin: '2024-12-15',
+        createdAt: new Date('2024-01-01'),
+        updatedAt: new Date()
+      }
+    ];
+    
+    console.log('✅ DEBUG: Enviando productos demo:', productos.length);
+    
+    res.json({
+      products: productos,
+      pagination: {
+        current_page: 1,
+        total_pages: 1,
+        total_items: productos.length,
+        per_page: 10
+      }
+    });
+  } catch (error) {
+    console.error('❌ DEBUG: Error en productos demo:', error);
+    res.status(500).json({ error: 'Error interno del servidor', details: error.message });
+  }
+});
+
 // Obtener todos los productos
 router.get('/productos', authenticate, async (req, res) => {
   try {
