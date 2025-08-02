@@ -37,7 +37,7 @@ app.use(bodyParser.json());// Analizar solicitudes con cuerpo JSON
 // Usar las rutas de autenticación
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);  // Añade las rutas de admin
-app.use('/api', productsRoutes);  // Rutas de productos
+app.use('/api/products', productsRoutes);  // Rutas de productos - CORREGIDO
 app.use('/api', backlogRoutes);  // Rutas de backlog
 app.use('/api/releases', releasesRoutes);  // Rutas de releases
 app.use('/api/sprints', sprintsRoutes);  // Rutas de sprints

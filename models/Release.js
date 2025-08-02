@@ -51,6 +51,26 @@ const ReleaseSchema = new mongoose.Schema({
     min: 0,
     max: 100
   },
+  historial: [{
+    fecha: {
+      type: Date,
+      default: Date.now
+    },
+    accion: {
+      type: String,
+      enum: ['creacion', 'cambio_estado', 'actualizacion', 'sprint_completado'],
+      required: true
+    },
+    estado_anterior: String,
+    estado_nuevo: String,
+    progreso_anterior: Number,
+    progreso_nuevo: Number,
+    usuario: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    notas: String
+  }],
   notas: {
     type: String,
     trim: true
@@ -99,6 +119,46 @@ ReleaseSchema.methods.calcularProgreso = async function() {
   this.progreso = Math.round((sprintsCompletados / this.sprints.length) * 100);
   
   return this.progreso;
+};
+
+// Método para cambiar estado con historial
+ReleaseSchema.methods.cambiarEstado = async function(nuevoEstado, usuario, notas = '') {
+  const estadoAnterior = this.estado;
+  const progresoAnterior = this.progreso;
+  
+  // Actualizar estado
+  this.estado = nuevoEstado;
+  
+  // Recalcular progreso basado en el nuevo estado
+  const nuevoProgreso = await this.calcularProgreso();
+  
+  // Agregar al historial
+  this.historial.push({
+    accion: 'cambio_estado',
+    estado_anterior: estadoAnterior,
+    estado_nuevo: nuevoEstado,
+    progreso_anterior: progresoAnterior,
+    progreso_nuevo: nuevoProgreso,
+    usuario: usuario,
+    notas: notas
+  });
+  
+  return this;
+};
+
+// Método para actualizar progreso cuando se completa un sprint
+ReleaseSchema.methods.actualizarProgresoSprint = function(sprintId, usuario) {
+  const progresoAnterior = this.progreso;
+  
+  this.historial.push({
+    accion: 'sprint_completado',
+    progreso_anterior: progresoAnterior,
+    progreso_nuevo: this.progreso,
+    usuario: usuario,
+    notas: `Sprint completado: ${sprintId}`
+  });
+  
+  return this;
 };
 
 // Middleware para actualizar timestamp de modificación

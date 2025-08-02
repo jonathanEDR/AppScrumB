@@ -7,6 +7,25 @@ const Task = require('../models/Task');
 const TimeTracking = require('../models/TimeTracking');
 const TeamMember = require('../models/TeamMember');
 
+// Obtener todos los usuarios (para listas desplegables)
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const users = await User.find({}, 'clerk_id nombre_negocio email role')
+      .sort({ nombre_negocio: 1 });
+    
+    res.json({
+      users: users,
+      total: users.length
+    });
+  } catch (error) {
+    console.error('Error obteniendo usuarios:', error);
+    res.status(500).json({ 
+      error: 'Error interno del servidor',
+      message: error.message 
+    });
+  }
+});
+
 // Obtener dashboard del usuario
 router.get('/dashboard/:userId', authenticate, async (req, res) => {
   try {

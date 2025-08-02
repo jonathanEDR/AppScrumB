@@ -287,7 +287,12 @@ router.post('/', authenticate, async (req, res) => {
       fecha_inicio,
       fecha_fin,
       producto,
-      velocidad_planificada
+      velocidad_planificada,
+      // NUEVOS CAMPOS - Mejoras
+      release_id,
+      prioridad,
+      capacidad_equipo,
+      progreso
     } = req.body;
 
     // Validaciones básicas
@@ -343,6 +348,11 @@ router.post('/', authenticate, async (req, res) => {
       fecha_fin: fin,
       producto,
       velocidad_planificada: velocidad_planificada || 0,
+      // NUEVOS CAMPOS - Mejoras
+      release_id: release_id || null,
+      prioridad: prioridad || 'media',
+      capacidad_equipo: capacidad_equipo || 0,
+      progreso: progreso || 0,
       created_by: req.user._id
     });
 
@@ -567,6 +577,69 @@ router.get('/metricas/:producto_id', async (req, res) => {
     res.json(metricas);
   } catch (error) {
     console.error('Error al obtener métricas de sprints:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// POST /api/sprints/:id/burndown - Actualizar datos de burndown
+router.post('/:id/burndown', authenticate, async (req, res) => {
+  try {
+    const { trabajo_restante, trabajo_completado } = req.body;
+    
+    const sprint = await Sprint.findById(req.params.id);
+    if (!sprint) {
+      return res.status(404).json({ error: 'Sprint no encontrado' });
+    }
+
+    if (!sprint.metricas) sprint.metricas = { burndown_data: [] };
+    if (!sprint.metricas.burndown_data) sprint.metricas.burndown_data = [];
+
+    sprint.metricas.burndown_data.push({
+      fecha: new Date(),
+      trabajo_restante: trabajo_restante || 0,
+      trabajo_completado: trabajo_completado || 0
+    });
+
+    // Actualizar progreso automáticamente
+    const total = trabajo_restante + trabajo_completado;
+    if (total > 0) {
+      sprint.progreso = Math.round((trabajo_completado / total) * 100);
+    }
+
+    await sprint.save();
+    res.json({ message: 'Burndown actualizado', progreso: sprint.progreso });
+  } catch (error) {
+    console.error('Error al actualizar burndown:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// GET /api/sprints/by-release/:releaseId - Obtener sprints por release
+router.get('/by-release/:releaseId', async (req, res) => {
+  try {
+    const sprints = await Sprint.find({ release_id: req.params.releaseId })
+      .populate('producto', 'nombre')
+      .populate('created_by', 'firstName lastName')
+      .sort({ fecha_inicio: 1 });
+
+    res.json(sprints);
+  } catch (error) {
+    console.error('Error al obtener sprints por release:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// GET /api/sprints/independent - Obtener sprints independientes
+router.get('/independent', async (req, res) => {
+  try {
+    const sprints = await Sprint.find({ release_id: { $in: [null, undefined] } })
+      .populate('producto', 'nombre')
+      .populate('created_by', 'firstName lastName')
+      .sort({ fecha_inicio: 1 });
+
+    res.json(sprints);
+  } catch (error) {
+    console.error('Error al obtener sprints independientes:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

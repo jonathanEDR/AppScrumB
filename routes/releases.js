@@ -167,20 +167,23 @@ router.put('/:id', authenticate, async (req, res) => {
           error: 'Se requiere fecha de lanzamiento para marcar como lanzado' 
         });
       }
+      // Usar el método del modelo para cambio de estado con historial
+      release.cambiarEstado(estado, req.user._id, `Estado cambiado desde ${release.estado} a ${estado}`);
     }
 
-    // Actualizar campos
+    // Actualizar otros campos
     if (nombre) release.nombre = nombre;
     if (version) release.version = version;
     if (descripcion !== undefined) release.descripcion = descripcion;
     if (fecha_objetivo) release.fecha_objetivo = fecha_objetivo;
     if (fecha_lanzamiento) release.fecha_lanzamiento = fecha_lanzamiento;
-    if (estado) release.estado = estado;
     if (prioridad) release.prioridad = prioridad;
     if (notas !== undefined) release.notas = notas;
     
     release.updated_by = req.user._id;
 
+    // Recalcular progreso
+    await release.calcularProgreso();
     await release.save();
     await release.populate('producto', 'nombre');
     await release.populate('created_by', 'firstName lastName');
@@ -341,6 +344,78 @@ router.get('/roadmap/:producto_id', async (req, res) => {
     res.json(roadmapData);
   } catch (error) {
     console.error('Error al obtener roadmap:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// PATCH /api/releases/:id/estado - Cambiar estado de release con historial
+router.patch('/:id/estado', authenticate, async (req, res) => {
+  try {
+    const { estado, notas = '' } = req.body;
+    
+    if (!estado) {
+      return res.status(400).json({ error: 'Estado es requerido' });
+    }
+
+    const release = await Release.findById(req.params.id)
+      .populate('sprints')
+      .populate('producto', 'nombre');
+      
+    if (!release) {
+      return res.status(404).json({ error: 'Release no encontrado' });
+    }
+
+    // Validar estado válido
+    const estadosValidos = ['planificado', 'en_desarrollo', 'testing', 'lanzado'];
+    if (!estadosValidos.includes(estado)) {
+      return res.status(400).json({ 
+        error: 'Estado no válido. Estados permitidos: ' + estadosValidos.join(', ') 
+      });
+    }
+
+    // Usar método del modelo para cambiar estado con historial
+    await release.cambiarEstado(estado, req.user._id, notas);
+    
+    console.log('Progreso después del cambio:', release.progreso);
+    
+    await release.save();
+
+    res.json({
+      message: 'Estado actualizado correctamente',
+      release: {
+        id: release._id,
+        estado: release.estado,
+        progreso: release.progreso,
+        historial: release.historial.slice(-5) // Últimos 5 cambios
+      }
+    });
+  } catch (error) {
+    console.error('Error al cambiar estado:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// GET /api/releases/:id/historial - Obtener historial completo
+router.get('/:id/historial', async (req, res) => {
+  try {
+    const release = await Release.findById(req.params.id)
+      .populate('historial.usuario', 'firstName lastName')
+      .select('historial nombre version');
+      
+    if (!release) {
+      return res.status(404).json({ error: 'Release no encontrado' });
+    }
+
+    res.json({
+      release: {
+        id: release._id,
+        nombre: release.nombre,
+        version: release.version
+      },
+      historial: release.historial.sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
+    });
+  } catch (error) {
+    console.error('Error al obtener historial:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
