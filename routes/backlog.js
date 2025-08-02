@@ -20,6 +20,7 @@ router.get('/backlog', authenticate, async (req, res) => {
       estado, 
       prioridad,
       tipo,
+      available_only, // Nuevo parámetro para filtrar solo tareas disponibles
       search = '', 
       page = 1, 
       limit = 20 
@@ -35,6 +36,16 @@ router.get('/backlog', authenticate, async (req, res) => {
     if (producto) filter.producto = producto;
     if (estado) filter.estado = estado;
     if (prioridad) filter.prioridad = prioridad;
+    
+    // Si available_only=true, filtrar solo tareas no asignadas y pendientes
+    if (available_only === 'true') {
+      filter.asignado_a = { $exists: false }; // No asignadas
+      filter.$or = [
+        { estado: 'pendiente' },
+        { estado: { $exists: false } }
+      ];
+      console.log('Filtrando solo tareas disponibles (no asignadas)');
+    }
     
     // Soporte para filtrar por tipo (puede ser múltiple)
     if (tipo) {
@@ -265,6 +276,12 @@ router.put('/backlog/:id', authenticate, requireProductOwnerOrAbove, async (req,
     console.log('Datos recibidos:', req.body);
     
     const updates = { ...req.body, updated_by: req.user._id };
+    
+    // Manejar asignación especial 'me' para auto-asignarse
+    if (updates.asignado_a === 'me') {
+      updates.asignado_a = req.user._id;
+      console.log('Auto-asignando tarea al usuario actual:', req.user._id);
+    }
     
     // Limpiar campos ObjectId vacíos
     if (updates.asignado_a === '' || updates.asignado_a === null) {

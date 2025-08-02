@@ -122,16 +122,28 @@ class DevelopersService {
       if (sprintId) {
         sprint = await Sprint.findById(sprintId);
       } else {
-        // Obtener el sprint activo
+        // Intentar obtener el sprint activo primero
         sprint = await Sprint.findOne({
-          status: 'active',
-          startDate: { $lte: new Date() },
-          endDate: { $gte: new Date() }
+          estado: 'activo'
         });
+        
+        // Si no hay sprint activo, buscar el sprint actual por fechas
+        if (!sprint) {
+          const now = new Date();
+          sprint = await Sprint.findOne({
+            fecha_inicio: { $lte: now },
+            fecha_fin: { $gte: now }
+          }).sort({ fecha_inicio: -1 });
+        }
+        
+        // Si aún no hay sprint, tomar el más reciente
+        if (!sprint) {
+          sprint = await Sprint.findOne().sort({ fecha_inicio: -1 });
+        }
       }
 
       if (!sprint) {
-        throw new Error('No se encontró un sprint activo');
+        throw new Error('No se encontró un sprint disponible');
       }
 
       // Obtener todas las tareas del sprint
@@ -152,11 +164,19 @@ class DevelopersService {
       
       const sprintProgress = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0;
 
+      // Mapear campos del sprint para compatibilidad
+      const sprintData = {
+        _id: sprint._id,
+        name: sprint.nombre,
+        goal: sprint.objetivo,
+        startDate: sprint.fecha_inicio,
+        endDate: sprint.fecha_fin,
+        status: sprint.estado,
+        progress: Math.round(sprintProgress)
+      };
+
       return {
-        sprint: {
-          ...sprint.toObject(),
-          progress: Math.round(sprintProgress)
-        },
+        sprint: sprintData,
         tasks: developerTasks,
         allTasks: allSprintTasks,
         metrics: {
@@ -165,6 +185,8 @@ class DevelopersService {
           sprintProgress: Math.round(sprintProgress),
           todoTasks: allSprintTasks.filter(t => t.status === 'todo').length,
           inProgressTasks: allSprintTasks.filter(t => t.status === 'in_progress').length,
+          codeReviewTasks: allSprintTasks.filter(t => t.status === 'code_review').length,
+          testingTasks: allSprintTasks.filter(t => t.status === 'testing').length,
           doneTasks: allSprintTasks.filter(t => t.status === 'done').length
         }
       };
@@ -271,15 +293,373 @@ class DevelopersService {
     try {
       const repositories = await CodeRepository.find({
         $or: [
-          { 'collaborators.user': userId },
-          { owner: userId }
+          { 'contributors.user': userId },
+          { maintainers: userId }
         ]
-      }).populate('owner', 'firstName lastName')
-        .populate('collaborators.user', 'firstName lastName');
+      }).populate('project', 'nombre')
+        .populate('maintainers', 'firstName lastName')
+        .populate('contributors.user', 'firstName lastName');
 
       return repositories;
     } catch (error) {
       throw new Error(`Error al obtener repositorios: ${error.message}`);
+    }
+  }
+
+  /**
+   * Crea una nueva entrada de time tracking
+   */
+  async createTimeEntry(userId, timeData) {
+    try {
+      const { taskId, startTime, endTime, description, date } = timeData;
+
+      // Validar que la tarea pertenezca al usuario
+      const task = await Task.findOne({ _id: taskId, assignee: userId });
+      if (!task) {
+        throw new Error('Tarea no encontrada o no tienes permisos para registrar tiempo en ella');
+      }
+
+      // Calcular duración en minutos
+      const start = new Date(startTime);
+      const end = new Date(endTime);
+      const duration = Math.round((end - start) / (1000 * 60));
+
+      if (duration <= 0) {
+        throw new Error('La hora de fin debe ser posterior a la hora de inicio');
+      }
+
+      const timeEntry = new TimeTracking({
+        user: userId,
+        task: taskId,
+        date: new Date(date),
+        startTime: start,
+        endTime: end,
+        duration,
+        description: description || '',
+        type: 'manual'
+      });
+
+      await timeEntry.save();
+      await timeEntry.populate('task', 'title type');
+
+      return timeEntry;
+    } catch (error) {
+      throw new Error(`Error al crear entrada de tiempo: ${error.message}`);
+    }
+  }
+
+  /**
+   * Inicia un timer para una tarea
+   */
+  async startTimer(userId, taskId) {
+    try {
+      // Verificar que la tarea pertenezca al usuario
+      const task = await Task.findOne({ _id: taskId, assignee: userId });
+      if (!task) {
+        throw new Error('Tarea no encontrada o no tienes permisos');
+      }
+
+      // Verificar si hay un timer activo
+      const activeTimer = await TimeTracking.findOne({
+        user: userId,
+        endTime: null
+      });
+
+      if (activeTimer) {
+        throw new Error('Ya tienes un timer activo. Detén el timer actual antes de iniciar uno nuevo.');
+      }
+
+      const timeEntry = new TimeTracking({
+        user: userId,
+        task: taskId,
+        date: new Date(),
+        startTime: new Date(),
+        type: 'timer'
+      });
+
+      await timeEntry.save();
+      await timeEntry.populate('task', 'title type');
+
+      return timeEntry;
+    } catch (error) {
+      throw new Error(`Error al iniciar timer: ${error.message}`);
+    }
+  }
+
+  /**
+   * Detiene un timer activo
+   */
+  async stopTimer(userId, description = '') {
+    try {
+      const activeTimer = await TimeTracking.findOne({
+        user: userId,
+        endTime: null
+      });
+
+      if (!activeTimer) {
+        throw new Error('No hay un timer activo');
+      }
+
+      const endTime = new Date();
+      const duration = Math.round((endTime - activeTimer.startTime) / (1000 * 60));
+
+      activeTimer.endTime = endTime;
+      activeTimer.duration = duration;
+      activeTimer.description = description;
+
+      await activeTimer.save();
+      await activeTimer.populate('task', 'title type');
+
+      return activeTimer;
+    } catch (error) {
+      throw new Error(`Error al detener timer: ${error.message}`);
+    }
+  }
+
+  /**
+   * Obtiene entradas de time tracking con filtros
+   */
+  async getTimeEntries(userId, filters = {}) {
+    try {
+      const query = { user: userId };
+
+      if (filters.taskId) {
+        query.task = filters.taskId;
+      }
+
+      if (filters.date) {
+        const startDate = new Date(filters.date);
+        const endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 1);
+        
+        query.date = {
+          $gte: startDate,
+          $lt: endDate
+        };
+      }
+
+      if (filters.startDate && filters.endDate) {
+        query.date = {
+          $gte: new Date(filters.startDate),
+          $lte: new Date(filters.endDate)
+        };
+      }
+
+      const entries = await TimeTracking.find(query)
+        .populate('task', 'title type priority')
+        .sort({ date: -1, startTime: -1 });
+
+      return entries;
+    } catch (error) {
+      throw new Error(`Error al obtener entradas de tiempo: ${error.message}`);
+    }
+  }
+
+  /**
+   * Actualiza una entrada de time tracking
+   */
+  async updateTimeEntry(entryId, userId, updateData) {
+    try {
+      const entry = await TimeTracking.findOne({ _id: entryId, user: userId });
+      
+      if (!entry) {
+        throw new Error('Entrada de tiempo no encontrada');
+      }
+
+      // No permitir actualizar entradas de timer activo
+      if (!entry.endTime) {
+        throw new Error('No se puede editar un timer activo');
+      }
+
+      const { startTime, endTime, description } = updateData;
+
+      if (startTime) entry.startTime = new Date(startTime);
+      if (endTime) entry.endTime = new Date(endTime);
+      if (description !== undefined) entry.description = description;
+
+      // Recalcular duración si se cambió start o end time
+      if (startTime || endTime) {
+        const duration = Math.round((entry.endTime - entry.startTime) / (1000 * 60));
+        if (duration <= 0) {
+          throw new Error('La hora de fin debe ser posterior a la hora de inicio');
+        }
+        entry.duration = duration;
+      }
+
+      await entry.save();
+      await entry.populate('task', 'title type priority');
+
+      return entry;
+    } catch (error) {
+      throw new Error(`Error al actualizar entrada de tiempo: ${error.message}`);
+    }
+  }
+
+  /**
+   * Elimina una entrada de time tracking
+   */
+  async deleteTimeEntry(entryId, userId) {
+    try {
+      const entry = await TimeTracking.findOneAndDelete({ _id: entryId, user: userId });
+      
+      if (!entry) {
+        throw new Error('Entrada de tiempo no encontrada');
+      }
+
+      return { message: 'Entrada de tiempo eliminada correctamente' };
+    } catch (error) {
+      throw new Error(`Error al eliminar entrada de tiempo: ${error.message}`);
+    }
+  }
+
+  /**
+   * Obtiene bugs reportados por el developer
+   */
+  async getBugReports(userId, filters = {}) {
+    try {
+      const query = { reporter: userId };
+
+      if (filters.status) {
+        query.status = filters.status;
+      }
+
+      if (filters.priority) {
+        query.priority = filters.priority;
+      }
+
+      if (filters.project) {
+        query.project = filters.project;
+      }
+
+      const bugReports = await BugReport.find(query)
+        .populate('project', 'nombre')
+        .populate('assignedTo', 'firstName lastName')
+        .populate('sprint', 'name')
+        .sort({ createdAt: -1 });
+
+      return bugReports;
+    } catch (error) {
+      throw new Error(`Error al obtener reportes de bugs: ${error.message}`);
+    }
+  }
+
+  /**
+   * Crea un nuevo reporte de bug
+   */
+  async createBugReport(userId, bugData) {
+    try {
+      const {
+        title,
+        description,
+        priority,
+        type,
+        stepsToReproduce,
+        expectedBehavior,
+        actualBehavior,
+        environment,
+        project,
+        attachments
+      } = bugData;
+
+      const bugReport = new BugReport({
+        title,
+        description,
+        priority: priority || 'medium',
+        type: type || 'bug',
+        stepsToReproduce,
+        expectedBehavior,
+        actualBehavior,
+        environment,
+        project,
+        reporter: userId,
+        status: 'open',
+        attachments: attachments || []
+      });
+
+      await bugReport.save();
+      await bugReport.populate([
+        { path: 'project', select: 'nombre' },
+        { path: 'reporter', select: 'firstName lastName' }
+      ]);
+
+      return bugReport;
+    } catch (error) {
+      throw new Error(`Error al crear reporte de bug: ${error.message}`);
+    }
+  }
+
+  /**
+   * Obtiene commits del developer
+   */
+  async getCommitHistory(userId, filters = {}) {
+    try {
+      const query = { 'author.user': userId };
+
+      if (filters.repository) {
+        query.repository = filters.repository;
+      }
+
+      if (filters.branch) {
+        query.branch = filters.branch;
+      }
+
+      if (filters.startDate && filters.endDate) {
+        query.createdAt = {
+          $gte: new Date(filters.startDate),
+          $lte: new Date(filters.endDate)
+        };
+      }
+
+      const commits = await Commit.find(query)
+        .populate('repository', 'name url')
+        .sort({ createdAt: -1 })
+        .limit(50);
+
+      return commits;
+    } catch (error) {
+      throw new Error(`Error al obtener historial de commits: ${error.message}`);
+    }
+  }
+
+  /**
+   * Obtiene pull requests del developer
+   */
+  async getPullRequests(userId, filters = {}) {
+    try {
+      const query = { author: userId };
+
+      if (filters.status) {
+        query.status = filters.status;
+      }
+
+      if (filters.repository) {
+        query.repository = filters.repository;
+      }
+
+      const pullRequests = await PullRequest.find(query)
+        .populate('repository', 'name url')
+        .populate('assignedReviewers', 'firstName lastName')
+        .sort({ createdAt: -1 });
+
+      return pullRequests;
+    } catch (error) {
+      throw new Error(`Error al obtener pull requests: ${error.message}`);
+    }
+  }
+
+  /**
+   * Obtiene el timer activo del usuario
+   */
+  async getActiveTimer(userId) {
+    try {
+      const activeTimer = await TimeTracking.findOne({
+        user: userId,
+        endTime: null
+      }).populate('task', 'title type priority');
+
+      return activeTimer;
+    } catch (error) {
+      throw new Error(`Error al obtener timer activo: ${error.message}`);
     }
   }
 }

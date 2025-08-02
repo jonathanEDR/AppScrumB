@@ -45,7 +45,7 @@ const taskSchema = new mongoose.Schema({
   },
   assignee: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'TeamMember',
+    ref: 'User',
     default: null
   },
   reporter: {
@@ -130,7 +130,7 @@ taskSchema.virtual('isOverdue').get(function() {
 });
 
 taskSchema.virtual('progressPercentage').get(function() {
-  if (this.acceptanceCriteria.length === 0) {
+  if (!this.acceptanceCriteria || this.acceptanceCriteria.length === 0) {
     // Si no hay criterios de aceptación, basarse en el estado
     const statusProgress = {
       'todo': 0,
@@ -178,9 +178,11 @@ taskSchema.methods.updateStatus = function(newStatus) {
   if (newStatus === 'done' && oldStatus !== 'done') {
     this.completedDate = new Date();
     // Marcar todos los criterios de aceptación como completados
-    this.acceptanceCriteria.forEach(criteria => {
-      criteria.completed = true;
-    });
+    if (this.acceptanceCriteria && this.acceptanceCriteria.length > 0) {
+      this.acceptanceCriteria.forEach(criteria => {
+        criteria.completed = true;
+      });
+    }
   }
   
   return this.save();
