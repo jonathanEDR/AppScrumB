@@ -9,6 +9,13 @@
     "seed": "node scripts/seedData.js",
     "seed:productos": "node scripts/seedProductos.js",
     "seed:backlog": "node scripts/seedBacklog.js",
+    "clean:testing": "node scripts/cleanForTesting.js",
+    "setup:testing": "node scripts/setupTestingData.js",
+    "assign:stories": "node scripts/assignStoriesToSprints.js",
+    "create:technical": "node scripts/createTechnicalItems.js",
+    "clean:technical": "node scripts/createTechnicalItems.js --clean",
+    "check:status": "node scripts/checkStatus.js",
+    "setup:complete": "npm run clean:testing && npm run seed:productos && npm run seed:backlog && npm run setup:testing && npm run assign:stories && npm run create:technical",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -17,6 +24,7 @@
   "type": "commonjs",
   "dependencies": {
     "@clerk/clerk-sdk-node": "^4.13.23",
+    "@octokit/rest": "^22.0.0",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",

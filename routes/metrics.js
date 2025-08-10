@@ -22,6 +22,25 @@ router.get('/test', async (req, res) => {
   }
 });
 
+// Ruta de productos para métricas (temporal sin autenticación)
+router.get('/productos', async (req, res) => {
+  try {
+    console.log('Cargando productos para métricas...');
+    const productos = await Product.find({})
+      .populate('responsable', 'nombre_negocio email')
+      .sort({ createdAt: -1 });
+    
+    console.log(`Productos encontrados: ${productos.length}`);
+    res.json({
+      products: productos,
+      total: productos.length
+    });
+  } catch (error) {
+    console.error('Error al cargar productos para métricas:', error);
+    res.status(500).json({ error: 'Error al cargar productos' });
+  }
+});
+
 // Versión temporal sin autenticación para debugging
 router.get('/dashboard/:producto_id/debug', async (req, res) => {
   try {
@@ -598,30 +617,101 @@ router.get('/dashboard/:producto_id', async (req, res) => {
     const { producto_id } = req.params;
     const { periodo = '30' } = req.query;
     
-    console.log('🔍 DEBUG: Recibida petición para producto:', producto_id);
-    
-    const fechaInicio = new Date();
-    fechaInicio.setDate(fechaInicio.getDate() - parseInt(periodo));
+    console.log('🔍 Cargando métricas reales para producto:', producto_id);
 
-    // Si no se encuentra el producto, crear datos simulados con el ID proporcionado
-    let producto;
-    try {
-      producto = await Product.findById(producto_id);
-      console.log('✅ DEBUG: Producto encontrado en BD:', producto?.nombre);
-    } catch (error) {
-      console.log('⚠️ DEBUG: Error al buscar producto:', error.message);
-    }
-
+    // Verificar que el producto existe
+    const producto = await Product.findById(producto_id);
     if (!producto) {
-      console.log('💡 DEBUG: Producto no encontrado en BD, usando datos simulados');
-      producto = {
-        _id: producto_id,
-        nombre: 'Producto Demo',
-        descripcion: 'Producto de demostración para el dashboard'
-      };
+      return res.status(404).json({ error: 'Producto no encontrado' });
     }
 
-    // Datos simulados mejorados para demostración
+    console.log('✅ Producto encontrado:', producto.nombre);
+
+    // Obtener sprints del producto
+    const sprints = await Sprint.find({ producto: producto_id })
+      .populate('producto', 'nombre')
+      .sort({ fecha_inicio: -1 });
+
+    console.log(`📊 Sprints encontrados: ${sprints.length}`);
+
+    // Obtener releases del producto
+    const releases = await Release.find({ producto: producto_id })
+      .populate('producto', 'nombre')
+      .sort({ fecha_objetivo: -1 });
+
+    console.log(`📦 Releases encontrados: ${releases.length}`);
+
+    // Obtener historias del producto
+    const historias = await BacklogItem.find({ producto: producto_id });
+    console.log(`📝 Historias encontradas: ${historias.length}`);
+
+    // CALCULAR MÉTRICAS REALES
+    
+    // 1. Velocidad del equipo
+    const sprintsCompletados = sprints.filter(s => s.estado === 'completado');
+    const sprintsActivos = sprints.filter(s => s.estado === 'activo');
+    
+    let velocidadPromedio = 0;
+    let ultimaVelocidad = 0;
+    
+    if (sprintsCompletados.length > 0) {
+      velocidadPromedio = sprintsCompletados.reduce((sum, s) => sum + (s.velocidad_real || s.velocidad_planificada), 0) / sprintsCompletados.length;
+      ultimaVelocidad = sprintsCompletados[0].velocidad_real || sprintsCompletados[0].velocidad_planificada;
+    }
+
+    // 2. Progreso general
+    const historiasCompletadas = historias.filter(h => h.estado === 'completado').length;
+    const historiasEnProgreso = historias.filter(h => h.estado === 'en_progreso').length;
+    const historiasPendientes = historias.filter(h => h.estado === 'pendiente').length;
+    const historiasRevision = historias.filter(h => h.estado === 'en_revision').length;
+    
+    const porcentajeProgreso = historias.length > 0 ? Math.round((historiasCompletadas / historias.length) * 100) : 0;
+
+    // 3. Distribución por estado
+    const distribucionEstado = [
+      { estado: 'completado', cantidad: historiasCompletadas },
+      { estado: 'en_progreso', cantidad: historiasEnProgreso },
+      { estado: 'pendiente', cantidad: historiasPendientes },
+      { estado: 'revision', cantidad: historiasRevision }
+    ];
+
+    // 4. Distribución por prioridad
+    const prioridadesCount = {
+      'muy_alta': historias.filter(h => h.prioridad === 'muy_alta').length,
+      'alta': historias.filter(h => h.prioridad === 'alta').length,
+      'media': historias.filter(h => h.prioridad === 'media').length,
+      'baja': historias.filter(h => h.prioridad === 'baja').length
+    };
+
+    const distribucionPrioridad = [
+      { prioridad: 'alta', cantidad: prioridadesCount.muy_alta + prioridadesCount.alta },
+      { prioridad: 'media', cantidad: prioridadesCount.media },
+      { prioridad: 'baja', cantidad: prioridadesCount.baja }
+    ];
+
+    // 5. Estados de sprints y releases
+    const sprintsEstados = {
+      total: sprints.length,
+      completados: sprintsCompletados.length,
+      enProgreso: sprintsActivos.length,
+      planificados: sprints.filter(s => s.estado === 'planificado').length
+    };
+
+    const releasesEstados = {
+      total: releases.length,
+      completados: releases.filter(r => r.estado === 'lanzado').length,
+      enProgreso: releases.filter(r => r.estado === 'en_desarrollo').length,
+      planificados: releases.filter(r => r.estado === 'planificado').length
+    };
+
+    // Determinar tendencia de velocidad
+    let tendencia = 'stable';
+    if (sprintsCompletados.length >= 2) {
+      const penultimaVelocidad = sprintsCompletados[1].velocidad_real || sprintsCompletados[1].velocidad_planificada;
+      tendencia = ultimaVelocidad > penultimaVelocidad ? 'up' : ultimaVelocidad < penultimaVelocidad ? 'down' : 'stable';
+    }
+
+    // Respuesta con datos reales
     const metricas = {
       producto: {
         id: producto._id,
@@ -629,73 +719,44 @@ router.get('/dashboard/:producto_id', async (req, res) => {
         descripcion: producto.descripcion
       },
       velocidad: {
-        promedio: 28.5,
-        ultimo_sprint: 32,
-        tendencia: 'up'
+        promedio: Math.round(velocidadPromedio * 10) / 10,
+        ultimo_sprint: ultimaVelocidad,
+        tendencia: tendencia
       },
       progreso: {
-        porcentaje: 76.3,
-        historias_completadas: 47,
-        historias_totales: 62,
-        historias_en_progreso: 8
+        porcentaje: porcentajeProgreso,
+        historias_completadas: historiasCompletadas,
+        historias_totales: historias.length,
+        historias_en_progreso: historiasEnProgreso
       },
       distribucion: {
-        por_estado: [
-          { 
-            estado: 'completado', 
-            cantidad: 47
-          },
-          { 
-            estado: 'en_progreso', 
-            cantidad: 8
-          },
-          { 
-            estado: 'pendiente', 
-            cantidad: 5
-          },
-          { 
-            estado: 'revision', 
-            cantidad: 2
-          }
-        ],
-        por_prioridad: [
-          { prioridad: 'alta', cantidad: 18 },
-          { prioridad: 'media', cantidad: 31 },
-          { prioridad: 'baja', cantidad: 13 }
-        ]
+        por_estado: distribucionEstado,
+        por_prioridad: distribucionPrioridad
       },
       productividad: {
-        historiasCompletadas: 47,
-        historiasEnProgreso: 8,
-        historiasTotal: 62,
-        porcentajeCompletado: '76.3'
+        historiasCompletadas: historiasCompletadas,
+        historiasEnProgreso: historiasEnProgreso,
+        historiasTotal: historias.length,
+        porcentajeCompletado: porcentajeProgreso
       },
-      sprints: {
-        total: 9,
-        completados: 7,
-        enProgreso: 1,
-        planificados: 1
-      },
-      releases: {
-        total: 4,
-        completados: 3,
-        enProgreso: 1
-      },
+      sprints: sprintsEstados,
+      releases: releasesEstados,
       calidad: {
-        defectos: 3,
-        coberturaPruebas: 87,
-        tiempoPromedioResolucion: 1.8
+        defectos: 3, // Simulado por ahora
+        coberturaPruebas: 87, // Simulado por ahora
+        tiempoPromedioResolucion: 1.8 // Simulado por ahora
       }
     };
 
-    console.log('✅ DEBUG: Enviando métricas simuladas mejoradas');
+    console.log('📊 Enviando métricas reales calculadas');
     res.json(metricas);
+
   } catch (error) {
-    console.error('❌ DEBUG: Error al obtener métricas del producto:', error);
+    console.error('❌ Error al obtener métricas del producto:', error);
     res.status(500).json({ error: 'Error interno del servidor', details: error.message });
   }
 });
-
+      
 // GET /api/metricas/velocity/:producto_id - Datos de velocidad del producto (SIN AUTH TEMPORAL)
 router.get('/velocity/:producto_id', async (req, res) => {
   try {

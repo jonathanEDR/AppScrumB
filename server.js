@@ -17,6 +17,8 @@ const developersRoutes = require('./routes/developers');  // Rutas de developers
 const timeTrackingRoutes = require('./routes/timeTracking');  // Rutas de time tracking
 const bugReportsRoutes = require('./routes/bugReports');  // Rutas de bug reports
 const usersRoutes = require('./routes/users');  // Rutas de usuarios
+const repositoriesRoutes = require('./routes/repositories');  // Rutas de repositorios
+const repositoriesNewRoutes = require('./routes/repositoriesNew');  // Nuevas rutas de repositorios
 
 
 const app = express();
@@ -49,6 +51,8 @@ app.use('/api/developers', developersRoutes);  // Rutas de developers
 app.use('/api/time-tracking', timeTrackingRoutes);  // Rutas de time tracking
 app.use('/api/bug-reports', bugReportsRoutes);  // Rutas de bug reports
 app.use('/api/users', usersRoutes);  // Rutas de usuarios
+app.use('/api/repositories', repositoriesRoutes);  // Rutas de repositorios (legacy)
+app.use('/api/repos', repositoriesNewRoutes);  // Nuevas rutas de repositorios optimizadas
 
 // Rutas de prueba y health check
 app.get('/', (req, res) => {

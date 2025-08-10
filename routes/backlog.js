@@ -39,11 +39,11 @@ router.get('/backlog', authenticate, async (req, res) => {
     
     // Si available_only=true, filtrar solo tareas no asignadas y pendientes
     if (available_only === 'true') {
-      filter.asignado_a = { $exists: false }; // No asignadas
       filter.$or = [
         { estado: 'pendiente' },
         { estado: { $exists: false } }
       ];
+      filter.estado = { $in: ['pendiente', 'en_progreso'] }; // Estados disponibles
       console.log('Filtrando solo tareas disponibles (no asignadas)');
     }
     

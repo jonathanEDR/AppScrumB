@@ -4,6 +4,11 @@ const commitSchema = new mongoose.Schema({
   hash: {
     type: String,
     required: true,
+    trim: true
+  },
+  sha: {
+    type: String,
+    required: true,
     unique: true,
     trim: true
   },
@@ -49,15 +54,20 @@ const commitSchema = new mongoose.Schema({
   },
   repository: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'CodeRepository',
+    ref: 'Repository',
     required: true
   },
   branch: {
     type: String,
-    required: true,
+    default: 'main',
     trim: true
   },
   parentCommits: [{
+    type: String,
+    trim: true
+  }],
+  // Alias para compatibilidad
+  parent_hashes: [{
     type: String,
     trim: true
   }],
@@ -65,6 +75,12 @@ const commitSchema = new mongoose.Schema({
     additions: { type: Number, default: 0 },
     deletions: { type: Number, default: 0 },
     totalChanges: { type: Number, default: 0 }
+  },
+  // Alias para stats compatibilidad
+  stats: {
+    additions: { type: Number, default: 0 },
+    deletions: { type: Number, default: 0 },
+    total: { type: Number, default: 0 }
   },
   files: [{
     path: {
@@ -100,6 +116,42 @@ const commitSchema = new mongoose.Schema({
   commitDate: {
     type: Date,
     required: true
+  },
+  // Alias para compatibilidad
+  date: {
+    type: Date
+  },
+  commit_date: {
+    type: Date
+  },
+  url: {
+    type: String,
+    trim: true
+  },
+  html_url: {
+    type: String,
+    trim: true
+  },
+  tree_hash: {
+    type: String,
+    trim: true
+  },
+  // Campos adicionales para compatibilidad con GitHub
+  author_name: {
+    type: String,
+    trim: true
+  },
+  author_email: {
+    type: String,
+    trim: true
+  },
+  author_username: {
+    type: String,
+    trim: true
+  },
+  tree_sha: {
+    type: String,
+    trim: true
   },
   verificationStatus: {
     verified: { type: Boolean, default: false },

@@ -3,11 +3,38 @@ const TimeTracking = require('../models/TimeTracking');
 const BugReport = require('../models/BugReport');
 const Commit = require('../models/Commit');
 const PullRequest = require('../models/PullRequest');
-const CodeRepository = require('../models/CodeRepository');
+const Repository = require('../models/Repository');
 const Sprint = require('../models/Sprint');
 const TeamMember = require('../models/TeamMember');
 
 class DevelopersService {
+  /**
+   * Obtiene lista de sprints disponibles para el developer
+   */
+  async getAvailableSprints() {
+    try {
+      console.log('🔍 getAvailableSprints - Obteniendo sprints disponibles');
+      
+      const sprints = await Sprint.find({})
+        .select('_id nombre objetivo fecha_inicio fecha_fin estado')
+        .sort({ fecha_inicio: -1 });
+
+      console.log('📋 Sprints encontrados:', {
+        total: sprints.length,
+        sprints: sprints.map(s => ({ 
+          id: s._id, 
+          nombre: s.nombre, 
+          estado: s.estado 
+        }))
+      });
+
+      return sprints;
+    } catch (error) {
+      console.error('❌ Error en getAvailableSprints:', error);
+      throw new Error(`Error al obtener sprints disponibles: ${error.message}`);
+    }
+  }
+
   /**
    * Obtiene las métricas del dashboard para un developer
    */
@@ -113,10 +140,37 @@ class DevelopersService {
   }
 
   /**
+   * Obtiene todos los sprints disponibles
+   */
+  async getAvailableSprints() {
+    try {
+      const sprints = await Sprint.find()
+        .select('_id nombre objetivo fecha_inicio fecha_fin estado')
+        .sort({ fecha_inicio: -1 });
+
+      // Mapear campos para compatibilidad
+      const sprintsData = sprints.map(sprint => ({
+        _id: sprint._id,
+        name: sprint.nombre,
+        goal: sprint.objetivo,
+        startDate: sprint.fecha_inicio,
+        endDate: sprint.fecha_fin,
+        status: sprint.estado
+      }));
+
+      return sprintsData;
+    } catch (error) {
+      throw new Error(`Error al obtener sprints disponibles: ${error.message}`);
+    }
+  }
+
+  /**
    * Obtiene datos del sprint board para el developer
    */
-  async getSprintBoardData(userId, sprintId = null) {
+  async getSprintBoardData(userId, sprintId = null, filterMode = 'all') {
     try {
+      console.log('🔍 getSprintBoardData - userId:', userId, 'sprintId:', sprintId, 'filterMode:', filterMode);
+      
       let sprint;
       
       if (sprintId) {
@@ -146,19 +200,52 @@ class DevelopersService {
         throw new Error('No se encontró un sprint disponible');
       }
 
-      // Obtener todas las tareas del sprint
-      const allSprintTasks = await Task.find({ sprint: sprint._id })
+      console.log('📋 Sprint encontrado para Sprint Board:', {
+        id: sprint._id,
+        name: sprint.nombre,
+        estado: sprint.estado,
+        filterMode
+      });
+
+      let developerTasks;
+      
+      // Determinar qué tareas mostrar según el modo de filtro
+      if (filterMode === 'sprint' && sprintId) {
+        // Mostrar solo tareas del sprint específico
+        developerTasks = await Task.find({ 
+          assignee: userId,
+          sprint: sprintId
+        })
         .populate('assignee', 'firstName lastName')
+        .populate('sprint', 'nombre estado')
         .sort({ priority: -1, createdAt: -1 });
+        
+        console.log('📊 Tareas del sprint específico:', {
+          sprintId,
+          total: developerTasks.length,
+          sprintName: sprint.nombre
+        });
+      } else {
+        // Mostrar todas las tareas del usuario (modo por defecto)
+        developerTasks = await Task.find({ assignee: userId })
+          .populate('assignee', 'firstName lastName')
+          .populate('sprint', 'nombre estado')
+          .sort({ priority: -1, createdAt: -1 });
+          
+        console.log('📊 Todas las tareas del usuario:', {
+          total: developerTasks.length,
+          filterMode: 'all'
+        });
+      }
 
-      // Filtrar tareas del developer
-      const developerTasks = allSprintTasks.filter(
-        task => task.assignee && task.assignee._id.toString() === userId
-      );
+      // Para las métricas, usar las tareas filtradas
+      const allRelevantTasks = developerTasks;
 
-      // Calcular métricas del sprint
-      const totalPoints = allSprintTasks.reduce((sum, task) => sum + (task.storyPoints || 0), 0);
-      const completedPoints = allSprintTasks
+      console.log('✅ Tareas del developer mostradas:', developerTasks.length);
+
+      // Calcular métricas basadas en las tareas filtradas
+      const totalPoints = allRelevantTasks.reduce((sum, task) => sum + (task.storyPoints || 0), 0);
+      const completedPoints = allRelevantTasks
         .filter(task => task.status === 'done')
         .reduce((sum, task) => sum + (task.storyPoints || 0), 0);
       
@@ -177,20 +264,22 @@ class DevelopersService {
 
       return {
         sprint: sprintData,
-        tasks: developerTasks,
-        allTasks: allSprintTasks,
+        tasks: developerTasks, // Tareas filtradas según el modo
+        allTasks: allRelevantTasks, // Mismas tareas para compatibilidad
+        filterMode, // Incluir el modo de filtro en la respuesta
         metrics: {
           totalPoints,
           completedPoints,
           sprintProgress: Math.round(sprintProgress),
-          todoTasks: allSprintTasks.filter(t => t.status === 'todo').length,
-          inProgressTasks: allSprintTasks.filter(t => t.status === 'in_progress').length,
-          codeReviewTasks: allSprintTasks.filter(t => t.status === 'code_review').length,
-          testingTasks: allSprintTasks.filter(t => t.status === 'testing').length,
-          doneTasks: allSprintTasks.filter(t => t.status === 'done').length
+          todoTasks: developerTasks.filter(t => t.status === 'todo').length,
+          inProgressTasks: developerTasks.filter(t => t.status === 'in_progress').length,
+          codeReviewTasks: developerTasks.filter(t => t.status === 'code_review').length,
+          testingTasks: developerTasks.filter(t => t.status === 'testing').length,
+          doneTasks: developerTasks.filter(t => t.status === 'done').length
         }
       };
     } catch (error) {
+      console.error('❌ Error en getSprintBoardData:', error);
       throw new Error(`Error al obtener datos del sprint board: ${error.message}`);
     }
   }
@@ -291,7 +380,7 @@ class DevelopersService {
    */
   async getDeveloperRepositories(userId) {
     try {
-      const repositories = await CodeRepository.find({
+      const repositories = await Repository.find({
         $or: [
           { 'contributors.user': userId },
           { maintainers: userId }

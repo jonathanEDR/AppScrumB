@@ -115,13 +115,32 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
   }
 });
 
+// GET /api/developers/sprints - Obtener lista de sprints disponibles
+router.get('/sprints', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const sprints = await developersService.getAvailableSprints();
+    
+    res.json({
+      success: true,
+      data: sprints
+    });
+  } catch (error) {
+    console.error('Error al obtener sprints disponibles:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message 
+    });
+  }
+});
+
 // GET /api/developers/sprint-board - Obtener datos del sprint board
 router.get('/sprint-board', authenticate, requireDeveloperRole, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { sprintId } = req.query;
+    const { sprintId, filterMode } = req.query;
     
-    const sprintData = await developersService.getSprintBoardData(userId, sprintId);
+    const sprintData = await developersService.getSprintBoardData(userId, sprintId, filterMode);
     
     res.json({
       success: true,
@@ -499,16 +518,90 @@ router.post('/backlog/:itemId/take', authenticate, requireDeveloperRole, async (
     }
 
     // Crear una Task correspondiente para el sistema de time tracking y "Mis Tareas"
+    // USAR EL MISMO SPRINT QUE MUESTRA EL SPRINT BOARD
+    const Sprint = require('../models/Sprint');
+    
+    // Usar la MISMA lógica que usa getSprintBoardData para encontrar el sprint
+    let activeSprint = await Sprint.findOne({ estado: 'activo' });
+    
+    // Si no hay activo, buscar el actual por fechas (MISMA LÓGICA)
+    if (!activeSprint) {
+      const now = new Date();
+      activeSprint = await Sprint.findOne({
+        fecha_inicio: { $lte: now },
+        fecha_fin: { $gte: now }
+      }).sort({ fecha_inicio: -1 });
+    }
+    
+    // Si aún no hay sprint, tomar el más reciente (MISMA LÓGICA)
+    if (!activeSprint) {
+      activeSprint = await Sprint.findOne().sort({ fecha_inicio: -1 });
+    }
+    
+    let sprintId = null;
+    if (activeSprint) {
+      sprintId = activeSprint._id;
+      console.log('📌 Usando sprint CONSISTENTE:', {
+        id: activeSprint._id,
+        nombre: activeSprint.nombre,
+        estado: activeSprint.estado
+      });
+      
+      // También actualizar el BacklogItem para tener consistencia
+      await BacklogItem.findByIdAndUpdate(
+        itemId,
+        { sprint: sprintId }
+      );
+    } else {
+      console.log('⚠️ No se encontró sprint activo');
+    }
+
+    // Funciones de mapeo para convertir tipos de BacklogItem a Task
+    const mapBacklogTypeToTaskType = (backlogType) => {
+      const typeMapping = {
+        'tarea': 'task',
+        'historia': 'story', 
+        'bug': 'bug',
+        'mejora': 'story',
+        'epic': 'epic',
+        'spike': 'spike'
+      };
+      return typeMapping[backlogType] || 'task'; // Por defecto 'task'
+    };
+
+    const mapBacklogStatusToTaskStatus = (backlogStatus) => {
+      const statusMapping = {
+        'pendiente': 'todo',
+        'en_progreso': 'in_progress', 
+        'en_revision': 'code_review',
+        'testing': 'testing',
+        'completado': 'done',
+        'done': 'done'
+      };
+      return statusMapping[backlogStatus] || 'todo';
+    };
+
+    const mapBacklogPriorityToTaskPriority = (backlogPriority) => {
+      const priorityMapping = {
+        'baja': 'low',
+        'media': 'medium',
+        'alta': 'high', 
+        'critica': 'critical',
+        'crítica': 'critical'
+      };
+      return priorityMapping[backlogPriority] || 'medium';
+    };
+
     const newTask = new Task({
       title: item.titulo,
       description: item.descripcion,
       status: mapBacklogStatusToTaskStatus(item.estado),
       priority: mapBacklogPriorityToTaskPriority(item.prioridad),
       assignee: userId,
-      sprint: item.sprint?._id,
+      sprint: sprintId, // Asignar al sprint activo si no tenía uno
       backlogItem: item._id,
       reporter: userId, // El que se auto-asigna es también el reporter
-      type: item.tipo,
+      type: mapBacklogTypeToTaskType(item.tipo), // CORREGIDO: Mapear el tipo correctamente
       storyPoints: item.puntos_historia,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -516,6 +609,7 @@ router.post('/backlog/:itemId/take', authenticate, requireDeveloperRole, async (
 
     const savedTask = await newTask.save();
     console.log('✅ Task creada automáticamente:', savedTask._id);
+    console.log('📋 Sprint asignado:', sprintId);
 
     console.log('✅ Item asignado exitosamente al developer');
     console.log('- Item:', item.titulo);
