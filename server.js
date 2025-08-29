@@ -3,6 +3,9 @@ const express = require('express');
 const cors = require('cors');  // Middleware para CORS
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
+
+// Configuración de Mongoose para usar las nuevas versiones de URL Parser y Topology
+mongoose.set('strictQuery', false);
 const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
 const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
 const productsRoutes = require('./routes/products');  // Rutas de productos
@@ -78,13 +81,46 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something broke!' });
 });
 
-// Conectar a MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('Conexión a MongoDB exitosa'))  // Mensaje en caso de éxito
-  .catch((err) => {
-    console.error('Error en la conexión a MongoDB', err);  // Manejo de errores de conexión
-    process.exit(1);  // Finaliza el proceso si la conexión falla
-  });
+// Configuración de MongoDB
+const connectDB = async () => {
+  try {
+    const mongoOptions = {
+      serverSelectionTimeoutMS: 5000,  // Tiempo de espera para selección de servidor
+      socketTimeoutMS: 45000,          // Tiempo de espera para operaciones
+      family: 4,                       // Usar IPv4, evita problemas con IPv6
+      retryWrites: true,              // Reintentar operaciones de escritura
+      w: 'majority',                  // Esperar confirmación de la mayoría de réplicas
+      maxPoolSize: 10,                // Máximo de conexiones simultáneas
+      minPoolSize: 5,                 // Mínimo de conexiones mantenidas
+      connectTimeoutMS: 10000,        // Tiempo máximo para conectar
+      retryWrites: true,
+      w: 'majority'
+    };
+
+    await mongoose.connect(process.env.MONGODB_URI, mongoOptions);
+    console.log('✅ Conexión a MongoDB establecida correctamente');
+    
+    // Manejador de eventos de conexión
+    mongoose.connection.on('error', err => {
+      console.error('❌ Error en la conexión de MongoDB:', err);
+    });
+
+    mongoose.connection.on('disconnected', () => {
+      console.warn('⚠️ MongoDB desconectado. Intentando reconectar...');
+    });
+
+    mongoose.connection.on('reconnected', () => {
+      console.log('✅ MongoDB reconectado exitosamente');
+    });
+
+  } catch (error) {
+    console.error('❌ Error al conectar con MongoDB:', error);
+    process.exit(1);
+  }
+};
+
+// Iniciar conexión a MongoDB
+connectDB();
 
 // Iniciar el servidor en el puerto definido
 app.listen(port, '0.0.0.0', () => {
