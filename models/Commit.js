@@ -4,7 +4,8 @@ const commitSchema = new mongoose.Schema({
   hash: {
     type: String,
     required: true,
-    trim: true
+    trim: true,
+    index: true
   },
   sha: {
     type: String,
