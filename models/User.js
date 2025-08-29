@@ -20,4 +20,12 @@ userSchema.pre('save', function(next) {
   next();
 });
 
-module.exports = mongoose.models.User || mongoose.model('User', userSchema);
+// Evitamos el error de modelo duplicado
+let UserModel;
+try {
+  UserModel = mongoose.model('User');
+} catch (error) {
+  UserModel = mongoose.model('User', userSchema);
+}
+
+module.exports = UserModel;

@@ -78,8 +78,17 @@ router.post('/register', async (req, res) => {
       role: 'user'
     });
     
-    await newUser.save();
-    console.log('New user created:', newUser); // Debug log
+    try {
+      await newUser.save();
+      console.log('New user created:', newUser); // Debug log
+    } catch (saveError) {
+      console.error('Error saving user:', saveError);
+      return res.status(500).json({ 
+        message: 'Error al guardar usuario', 
+        error: saveError.message,
+        details: saveError
+      });
+    }
     
     res.status(201).json({ 
       message: 'Usuario registrado exitosamente',
