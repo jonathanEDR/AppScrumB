@@ -24,6 +24,11 @@ const repositoriesNewRoutes = require('./routes/repositoriesNew');  // Nuevas ru
 const app = express();
 const port = process.env.PORT || 5000;  // Usar el puerto de la variable de entorno o el 5000 por defecto
 
+// Configurar timeouts del servidor
+const server = require('http').createServer(app);
+server.keepAliveTimeout = 120000; // 120 segundos
+server.headersTimeout = 120000; // 120 segundos
+
 // Leer orígenes de CORS desde .env y convertirlos en array
 const corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:5173', 'http://127.0.0.1:5173'];
 
@@ -82,6 +87,6 @@ mongoose.connect(process.env.MONGODB_URI)
   });
 
 // Iniciar el servidor en el puerto definido
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor corriendo en el puerto ${port}`);
 });
