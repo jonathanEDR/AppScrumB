@@ -1,6 +1,10 @@
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { clerkClient } = require('@clerk/clerk-sdk-node');
+const { ClerkExpressWithAuth } = require('@clerk/clerk-sdk-node');
+
+// Configurar el middleware de Clerk
+const clerk = ClerkExpressWithAuth({
+  secretKey: process.env.CLERK_SECRET_KEY,
+});
 
 // Middleware principal de autenticación
 const authenticate = async (req, res, next) => {
@@ -15,18 +19,35 @@ const authenticate = async (req, res, next) => {
     const session = await clerkClient.verifyToken(token);
     
     if (!session) {
+      console.log('Token inválido:', token);
       return res.status(401).json({ message: 'Token inválido' });
     }
+
+    console.log('Session verificada:', session);
 
     // Obtener información del usuario de Clerk
     const clerkUser = await clerkClient.users.getUser(session.sub);
     
     if (!clerkUser) {
+      console.log('Usuario no encontrado en Clerk:', session.sub);
       return res.status(401).json({ message: 'Usuario no encontrado en Clerk' });
     }
 
+    console.log('Usuario Clerk encontrado:', clerkUser.id);
+
     // Buscar usuario en la base de datos
     let user = await User.findOne({ clerk_id: session.sub });
+    
+    // Si el usuario no existe en la base de datos, lo creamos
+    if (!user) {
+      console.log('Creando nuevo usuario en la base de datos');
+      user = new User({
+        clerk_id: clerkUser.id,
+        email: clerkUser.emailAddresses[0].emailAddress,
+        role: 'user' // rol por defecto
+      });
+      await user.save();
+    }
     
     if (!user) {
       // Si el usuario no existe en nuestra base de datos, lo creamos

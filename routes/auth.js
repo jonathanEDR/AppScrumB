@@ -9,12 +9,27 @@ const router = express.Router();
 router.get('/user-profile', authenticate, async (req, res) => {
   try {
     console.log('User profile request for:', req.user); // Debug log
-    const user = await User.findOne({ clerk_id: req.user.clerk_id })
-      .select('-__v');
+    
+    if (!req.user || !req.user.clerk_id) {
+      console.log('Invalid user object:', req.user);
+      return res.status(400).json({ message: 'Información de usuario inválida' });
+    }
+
+    const user = await User.findOne({ clerk_id: req.user.clerk_id });
     
     if (!user) {
-      console.log('User not found in database:', req.user.clerk_id); // Debug log
-      return res.status(404).json({ message: 'Usuario no encontrado' });
+      console.log('User not found in database:', req.user.clerk_id);
+      // Crear usuario si no existe
+      const newUser = new User({
+        clerk_id: req.user.clerk_id,
+        email: req.user.email,
+        role: 'user' // rol por defecto
+      });
+      await newUser.save();
+      return res.json({ 
+        message: 'Nuevo usuario creado',
+        user: newUser 
+      });
     }
     
     res.json({ 

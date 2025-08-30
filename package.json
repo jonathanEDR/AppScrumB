@@ -23,7 +23,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@clerk/clerk-sdk-node": "^4.13.23",
+    "@clerk/express": "^1.7.26",
     "@octokit/rest": "^22.0.0",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
