@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
-const { ClerkExpressWithAuth } = require('@clerk/express');
+const clerk = require('@clerk/clerk-sdk-node');
 
 // Configuración de Mongoose
 mongoose.set('strictQuery', false);

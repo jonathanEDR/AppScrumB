@@ -1,13 +1,22 @@
 const User = require('../models/User');
-const { ClerkExpressWithAuth } = require('@clerk/express');
-
-// Configurar el middleware de Clerk
-const clerk = ClerkExpressWithAuth({
-  secretKey: process.env.CLERK_SECRET_KEY,
-});
+const { clerkClient } = require('@clerk/clerk-sdk-node');
+const clerk = require('@clerk/clerk-sdk-node');
 
 // Middleware principal de autenticación
 const authenticate = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ message: 'Token no proporcionado' });
+    }
+
+    // Verificar el token con Clerk
+    try {
+      const session = await clerk.verifyToken(token);
+      if (!session) {
+        return res.status(401).json({ message: 'Token inválido' });
+      }
   try {
     const token = req.headers['authorization']?.split(' ')[1];
     
