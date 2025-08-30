@@ -1,5 +1,5 @@
 const User = require('../models/User');
-const { ClerkExpressWithAuth } = require('@clerk/clerk-sdk-node');
+const { ClerkExpressWithAuth } = require('@clerk/express');
 
 // Configurar el middleware de Clerk
 const clerk = ClerkExpressWithAuth({

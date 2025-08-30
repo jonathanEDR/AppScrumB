@@ -16,6 +16,7 @@
     "clean:technical": "node scripts/createTechnicalItems.js --clean",
     "check:status": "node scripts/checkStatus.js",
     "setup:complete": "npm run clean:testing && npm run seed:productos && npm run seed:backlog && npm run setup:testing && npm run assign:stories && npm run create:technical",
+    "build": "npm install",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
