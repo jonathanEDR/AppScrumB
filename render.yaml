@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: appscrum-backend
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: https://appscrumb-nine.vercel.app

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "check-deployment": "node scripts/check-deployment.js",
     "seed": "node scripts/seedData.js",
     "seed:productos": "node scripts/seedProductos.js",
     "seed:backlog": "node scripts/seedBacklog.js",
