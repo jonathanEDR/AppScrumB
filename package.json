@@ -9,6 +9,8 @@
     "check-deployment": "node scripts/check-deployment.js",
     "test-users": "node scripts/test-user-integration.js",
     "test-connectivity": "node scripts/test-connectivity.js",
+    "test-terminal": "node scripts/test-connectivity-terminal.js",
+    "diagnostic": "node scripts/diagnostic-server.js",
     "seed": "node scripts/seedData.js",
     "seed:productos": "node scripts/seedProductos.js",
     "seed:backlog": "node scripts/seedBacklog.js",

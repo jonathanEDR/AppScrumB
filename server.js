@@ -10,7 +10,30 @@ mongoose.set('strictQuery', false);
 
 // Importar y ejecutar la conexión a MongoDB
 const connectDB = require('./config/database');
-connectDB();
+
+// Función para iniciar el servidor después de conectar a MongoDB
+const startServer = async () => {
+  try {
+    // Esperar a que MongoDB se conecte
+    await connectDB();
+
+    // Una vez conectado, iniciar el servidor
+    server.listen(port, '0.0.0.0', () => {
+      console.log(`🚀 Servidor corriendo en el puerto ${port}`);
+      console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`📡 Puerto: ${port}`);
+      console.log(`🔗 MongoDB: ${mongoose.connection.readyState === 1 ? 'conectado' : 'desconectado'}`);
+      console.log(`🔧 CORS Origins: ${corsOrigins.join(', ')}`);
+      console.log('✅ Servidor listo para recibir conexiones');
+    });
+  } catch (error) {
+    console.error('❌ Error al iniciar el servidor:', error);
+    process.exit(1);
+  }
+};
+
+// Iniciar el servidor
+startServer();
 const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
 const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
 const productsRoutes = require('./routes/products');  // Rutas de productos
@@ -38,25 +61,29 @@ server.keepAliveTimeout = 120000; // 120 segundos
 server.headersTimeout = 120000; // 120 segundos
 
 // Leer orígenes de CORS desde .env y convertirlos en array
-const corsOrigins = process.env.CORS_ORIGINS ? 
-  process.env.CORS_ORIGINS.split(',') : 
+const corsOrigins = process.env.CORS_ORIGINS ?
+  process.env.CORS_ORIGINS.split(',') :
   ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://appscrumb-nine.vercel.app'];
+
+// Forzar el puerto correcto en Render
+if (process.env.NODE_ENV === 'production') {
+  console.log('🚀 Running in production mode');
+  console.log('📡 Using port:', port);
+  console.log('🌐 CORS origins:', corsOrigins);
+  console.log('🔧 Environment variables check:');
+  console.log('   - MONGODB_URI:', process.env.MONGODB_URI ? '✅ configured' : '❌ missing');
+  console.log('   - CLERK_SECRET_KEY:', process.env.CLERK_SECRET_KEY ? '✅ configured' : '❌ missing');
+  console.log('   - CORS_ORIGINS:', process.env.CORS_ORIGINS ? '✅ configured' : '❌ using defaults');
+}
 
 // Configuración de CORS
 app.use(cors({
   origin: corsOrigins,
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With']
 }));
 
-// Middleware para CORS y Body Parser
-app.use(cors({
-  origin: corsOrigins,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
-}));
 app.use(bodyParser.json());// Analizar solicitudes con cuerpo JSON
 
 // Usar las rutas de autenticación
@@ -82,7 +109,8 @@ app.get('/', (req, res) => {
   res.json({
     message: 'Backend server is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    port: port
   });
 });
 
@@ -90,7 +118,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -102,11 +131,26 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Endpoint de diagnóstico detallado
+app.get('/api/diagnostic', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    port: port,
+    mongodb_uri: process.env.MONGODB_URI ? 'configured' : 'not configured',
+    clerk_secret: process.env.CLERK_SECRET_KEY ? 'configured' : 'not configured',
+    cors_origins: process.env.CORS_ORIGINS || 'default',
+    mongodb_state: mongoose.connection.readyState
+  });
+});
+
 // Endpoint de prueba sin autenticación
 app.get('/api/test', (req, res) => {
   res.json({
     message: 'API is working!',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -114,9 +158,4 @@ app.get('/api/test', (req, res) => {
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Something broke!' });
-});
-
-// Iniciar el servidor HTTP
-server.listen(port, '0.0.0.0', () => {
-  console.log(`Servidor corriendo en el puerto ${port}`);
 });

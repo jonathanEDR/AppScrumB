@@ -1,5 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const { clerkClient } = require('@clerk/clerk-sdk-node');
 const { authenticate } = require('../middleware/authenticate');
