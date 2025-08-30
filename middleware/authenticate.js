@@ -1,69 +1,42 @@
-const User = require('../models/User');
 const { clerkClient } = require('@clerk/clerk-sdk-node');
+const authService = require('../services/authService');
 
 // Middleware principal de autenticación
 const authenticate = async (req, res, next) => {
-  console.log('Iniciando autenticación...');
-  console.log('Headers:', req.headers);
   try {
     const token = req.headers.authorization?.split(' ')[1];
     
     if (!token) {
       console.log('No token provided in headers');
-      return res.status(401).json({ message: 'Token no proporcionado' });
-    }
-    
-    console.log('Verificando token con Clerk...');
-
-    // Verificar token con Clerk
-    const session = await clerkClient.verifyToken(token);
-    
-    if (!session) {
-      console.log('Token inválido:', token);
-      return res.status(401).json({ message: 'Token inválido' });
+      return res.status(401).json({ 
+        status: 'error',
+        code: 'AUTH_NO_TOKEN',
+        message: 'Token no proporcionado' 
+      });
     }
 
+    // Verificar token con Clerk y obtener sesión
+    const session = await authService.verifyToken(token);
     console.log('Session verificada:', session);
 
     // Obtener información del usuario de Clerk
     const clerkUser = await clerkClient.users.getUser(session.sub);
-    
-    if (!clerkUser) {
-      console.log('Usuario no encontrado en Clerk:', session.sub);
-      return res.status(401).json({ message: 'Usuario no encontrado en Clerk' });
-    }
-
     console.log('Usuario Clerk encontrado:', clerkUser.id);
 
-    // Buscar usuario en la base de datos
-    let user = await User.findOne({ clerk_id: session.sub });
+    // Obtener o crear usuario en nuestra base de datos
+    const user = await authService.getOrCreateUser(
+      session.sub,
+      clerkUser.emailAddresses[0].emailAddress,
+      clerkUser.firstName
+    );
     
-    // Si el usuario no existe en la base de datos, lo creamos
-    if (!user) {
-      console.log('Creando nuevo usuario en la base de datos para:', session.sub);
-      const userData = {
-        clerk_id: session.sub,
-        email: clerkUser.emailAddresses[0].emailAddress,
-        nombre_negocio: clerkUser.firstName || 'Usuario',
-        role: clerkUser.publicMetadata?.role || 'user', // Usamos el rol de Clerk si existe
-        is_active: true
-      };
-      console.log('Datos del usuario a crear:', userData);
-      
-      try {
-        user = new User(userData);
-        await user.save();
-        console.log('Usuario creado exitosamente:', user._id);
-        console.log('Nuevo usuario creado:', user);
-      } catch (error) {
-        console.error('Error al crear usuario:', error);
-        return res.status(500).json({ message: 'Error al crear usuario en la base de datos' });
-      }
-    }
-
     // Verificar si el usuario está activo
     if (!user.is_active) {
-      return res.status(401).json({ message: 'Usuario desactivado' });
+      return res.status(401).json({ 
+        status: 'error',
+        code: 'USER_INACTIVE',
+        message: 'Usuario desactivado' 
+      });
     }
     
     // Añadir objeto de usuario a la petición
@@ -78,10 +51,32 @@ const authenticate = async (req, res, next) => {
     };
 
     console.log('Usuario autenticado:', req.user);
+
     next();
   } catch (error) {
     console.error('Error en autenticación:', error);
+    
+    // Manejar diferentes tipos de errores
+    if (error.message === 'Token inválido') {
+      return res.status(401).json({ 
+        status: 'error',
+        code: 'INVALID_TOKEN',
+        message: 'Token inválido o expirado'
+      });
+    }
+    
+    if (error.message === 'Usuario no encontrado') {
+      return res.status(404).json({
+        status: 'error',
+        code: 'USER_NOT_FOUND',
+        message: 'Usuario no encontrado'
+      });
+    }
+    
+    // Error genérico del servidor
     res.status(500).json({ 
+      status: 'error',
+      code: 'SERVER_ERROR',
       message: 'Error interno del servidor',
       error: error.message 
     });
