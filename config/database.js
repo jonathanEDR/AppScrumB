@@ -2,14 +2,19 @@ const mongoose = require('mongoose');
 
 const connectDB = async () => {
     try {
-        const ATLAS_URI = process.env.MONGODB_URI;
+        // Sanear el valor de la variable de entorno para evitar saltos de línea u espacios
+        const ATLAS_URI = (process.env.MONGODB_URI || '').trim();
         const NODE_ENV = process.env.NODE_ENV || 'development';
 
         const mongoOptions = {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
             serverSelectionTimeoutMS: 5000,
             socketTimeoutMS: 45000,
             maxPoolSize: 10
         };
+
+        console.log(`MongoDB connect - NODE_ENV=${NODE_ENV} - ATLAS_URI configured=${!!ATLAS_URI}`);
 
         // En producción, usar solo MongoDB Atlas
         if (NODE_ENV === 'production') {
@@ -53,13 +58,14 @@ const connectDB = async () => {
         });
 
     } catch (error) {
-        console.error('❌ Error al conectar a MongoDB:', error.message);
+        console.error('❌ Error al conectar a MongoDB:', error && error.message ? error.message : error);
         console.log('\n💡 Verifica que:');
-        console.log('1. MongoDB está corriendo localmente (mongod)');
-        console.log('2. El puerto 27017 está disponible');
-        console.log('3. Las credenciales de MongoDB Atlas son correctas (si usas Atlas)');
+        console.log('1. MongoDB está corriendo localmente (mongod) si no estás en producción');
+        console.log('2. El puerto 27017 está disponible (local)');
+        console.log('3. La variable de entorno MONGODB_URI está correctamente configurada en el entorno de despliegue');
+        console.log('4. La cadena de conexión no contiene saltos de línea o espacios adicionales');
         
-        // No cerramos el proceso, intentamos reconectar
+        // Intentar reconectar con backoff simple
         setTimeout(() => {
             connectDB();
         }, 5000);

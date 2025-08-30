@@ -78,6 +78,12 @@ router.post('/register', async (req, res) => {
   const { email, nombre_negocio, clerk_id } = req.body;
 
   try {
+    // Verificar estado de conexión a MongoDB
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Intento de registro pero MongoDB no está conectado (readyState=', mongoose.connection.readyState, ')');
+      return res.status(503).json({ message: 'Servicio temporalmente no disponible - base de datos desconectada' });
+    }
+
     // Validar datos requeridos
     if (!email || !clerk_id) {
       console.log('Missing required fields:', { email, clerk_id }); // Debug log
@@ -332,6 +338,12 @@ router.post('/register', async (req, res) => {
   console.log('Recibida solicitud de registro:', req.body); // Debug log
 
   try {
+    // Verificar estado de conexión a MongoDB
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Intento de registro (Clerk) pero MongoDB no está conectado (readyState=', mongoose.connection.readyState, ')');
+      return res.status(503).json({ message: 'Servicio temporalmente no disponible - base de datos desconectada' });
+    }
+
     const token = req.headers['authorization']?.split(' ')[1];
     
     if (!token) {

@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const { clerkClient } = require('@clerk/clerk-sdk-node');
+const mongoose = require('mongoose');
 
 class AuthService {
   // Verifica y obtiene la información del usuario de Clerk
@@ -19,9 +20,16 @@ class AuthService {
   // Obtiene o crea un usuario en nuestra base de datos
   async getOrCreateUser(clerkId, userEmail, firstName) {
     try {
+      // Verificar que la conexión a MongoDB esté lista (1 = conectado)
+      if (mongoose.connection.readyState !== 1) {
+        const err = new Error('MongoDB no está conectado');
+        err.code = 'DB_NOT_CONNECTED';
+        throw err;
+      }
+
       // Buscar usuario existente
       let user = await User.findOne({ clerk_id: clerkId });
-      
+
       if (!user) {
         // Crear nuevo usuario si no existe
         user = new User({
@@ -31,11 +39,11 @@ class AuthService {
           role: 'user',
           is_active: true
         });
-        
+
         await user.save();
         console.log('Usuario creado:', user._id);
       }
-      
+
       return user;
     } catch (error) {
       console.error('Error en getOrCreateUser:', error);
