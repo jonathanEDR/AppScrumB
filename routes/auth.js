@@ -5,15 +5,33 @@ const { clerkClient } = require('@clerk/clerk-sdk-node');
 const { authenticate } = require('../middleware/authenticate');
 const router = express.Router();
 
+// Ruta para obtener usuario por ClerkId
+router.get('/user/:clerkId', authenticate, async (req, res) => {
+  try {
+    const user = await User.findOne({ clerk_id: req.params.clerkId });
+    if (!user) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
+    }
+    res.json(user);
+  } catch (error) {
+    console.error('Error al buscar usuario:', error);
+    res.status(500).json({ message: 'Error al buscar usuario' });
+  }
+});
+
 // Ruta protegida para obtener perfil del usuario
 router.get('/user-profile', authenticate, async (req, res) => {
   try {
-    console.log('User profile request for:', req.user); // Debug log
+    console.log('User profile request initiated');
+    console.log('Request user object:', req.user);
+    console.log('MongoDB connection state:', mongoose.connection.readyState);
     
     if (!req.user || !req.user.clerk_id) {
       console.log('Invalid user object:', req.user);
       return res.status(400).json({ message: 'Información de usuario inválida' });
     }
+    
+    console.log('Searching for user with clerk_id:', req.user.clerk_id);
 
     const user = await User.findOne({ clerk_id: req.user.clerk_id });
     

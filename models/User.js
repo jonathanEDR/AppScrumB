@@ -34,8 +34,25 @@ const userSchema = new mongoose.Schema({
 });
 
 // Middleware para actualizar updated_at antes de guardar
-userSchema.pre('save', function(next) {
+userSchema.pre('save', async function(next) {
   this.updated_at = Date.now();
+  
+  // Verificar si el usuario ya existe
+  if (this.isNew) {
+    const existingUser = await this.constructor.findOne({
+      $or: [
+        { clerk_id: this.clerk_id },
+        { email: this.email }
+      ]
+    });
+
+    if (existingUser) {
+      const error = new Error('Usuario ya existe');
+      error.code = 11000;
+      return next(error);
+    }
+  }
+  
   next();
 });
 

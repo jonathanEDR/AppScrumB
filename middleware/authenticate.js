@@ -9,8 +9,11 @@ const authenticate = async (req, res, next) => {
     const token = req.headers.authorization?.split(' ')[1];
     
     if (!token) {
+      console.log('No token provided in headers');
       return res.status(401).json({ message: 'Token no proporcionado' });
     }
+    
+    console.log('Verificando token con Clerk...');
 
     // Verificar token con Clerk
     const session = await clerkClient.verifyToken(token);
