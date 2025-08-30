@@ -37,17 +37,20 @@ const authenticate = async (req, res, next) => {
     
     // Si el usuario no existe en la base de datos, lo creamos
     if (!user) {
-      console.log('Creando nuevo usuario en la base de datos');
-      user = new User({
+      console.log('Creando nuevo usuario en la base de datos para:', session.sub);
+      const userData = {
         clerk_id: session.sub,
         email: clerkUser.emailAddresses[0].emailAddress,
         nombre_negocio: clerkUser.firstName || 'Usuario',
-        role: 'user', // Rol por defecto
+        role: clerkUser.publicMetadata?.role || 'user', // Usamos el rol de Clerk si existe
         is_active: true
-      });
+      };
+      console.log('Datos del usuario a crear:', userData);
       
       try {
+        user = new User(userData);
         await user.save();
+        console.log('Usuario creado exitosamente:', user._id);
         console.log('Nuevo usuario creado:', user);
       } catch (error) {
         console.error('Error al crear usuario:', error);
