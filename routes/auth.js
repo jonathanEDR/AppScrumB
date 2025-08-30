@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { clerkClient } = require('@clerk/express');
+const { clerkClient } = require('@clerk/clerk-sdk-node');
 const { authenticate } = require('../middleware/authenticate');
 const router = express.Router();
 

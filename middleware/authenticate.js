@@ -1,24 +1,12 @@
 const User = require('../models/User');
 const { clerkClient } = require('@clerk/clerk-sdk-node');
-const clerk = require('@clerk/clerk-sdk-node');
 
 // Middleware principal de autenticación
 const authenticate = async (req, res, next) => {
+  console.log('Iniciando autenticación...');
+  console.log('Headers:', req.headers);
   try {
     const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ message: 'Token no proporcionado' });
-    }
-
-    // Verificar el token con Clerk
-    try {
-      const session = await clerk.verifyToken(token);
-      if (!session) {
-        return res.status(401).json({ message: 'Token inválido' });
-      }
-  try {
-    const token = req.headers['authorization']?.split(' ')[1];
     
     if (!token) {
       return res.status(401).json({ message: 'Token no proporcionado' });
@@ -51,16 +39,6 @@ const authenticate = async (req, res, next) => {
     if (!user) {
       console.log('Creando nuevo usuario en la base de datos');
       user = new User({
-        clerk_id: clerkUser.id,
-        email: clerkUser.emailAddresses[0].emailAddress,
-        role: 'user' // rol por defecto
-      });
-      await user.save();
-    }
-    
-    if (!user) {
-      // Si el usuario no existe en nuestra base de datos, lo creamos
-      user = new User({
         clerk_id: session.sub,
         email: clerkUser.emailAddresses[0].emailAddress,
         nombre_negocio: clerkUser.firstName || 'Usuario',
@@ -77,13 +55,14 @@ const authenticate = async (req, res, next) => {
       }
     }
 
+    // Verificar si el usuario está activo
     if (!user.is_active) {
       return res.status(401).json({ message: 'Usuario desactivado' });
     }
     
-    // Add user object to request
+    // Añadir objeto de usuario a la petición
     req.user = {
-      _id: user._id,  // Importante: usar _id en lugar de id
+      _id: user._id,
       id: user._id,   // Mantener id por compatibilidad
       clerk_id: user.clerk_id,
       email: user.email,
@@ -92,11 +71,14 @@ const authenticate = async (req, res, next) => {
       is_active: user.is_active
     };
 
-    console.log('User authenticated:', req.user);
+    console.log('Usuario autenticado:', req.user);
     next();
   } catch (error) {
     console.error('Error en autenticación:', error);
-    res.status(500).json({ message: 'Error interno del servidor' });
+    res.status(500).json({ 
+      message: 'Error interno del servidor',
+      error: error.message 
+    });
   }
 };
 

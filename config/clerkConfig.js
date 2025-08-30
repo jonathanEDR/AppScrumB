@@ -1,5 +1,5 @@
 // config/clerkConfig.js
-const { Clerk } = require('@clerk/express');
+const { Clerk } = require('@clerk/clerk-sdk-node');
 require('dotenv').config();
 
 // Inicializar Clerk correctamente
