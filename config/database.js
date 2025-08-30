@@ -2,9 +2,8 @@ const mongoose = require('mongoose');
 
 const connectDB = async () => {
     try {
-        // Intentar primero conexión local, si no está disponible usar MongoDB Atlas
-        const LOCAL_URI = 'mongodb://localhost:27017/AppScrum';
         const ATLAS_URI = process.env.MONGODB_URI;
+        const NODE_ENV = process.env.NODE_ENV || 'development';
 
         const mongoOptions = {
             serverSelectionTimeoutMS: 5000,
@@ -12,16 +11,29 @@ const connectDB = async () => {
             maxPoolSize: 10
         };
 
-        try {
-            // Intentar conexión local primero
-            await mongoose.connect(LOCAL_URI, mongoOptions);
-            console.log('✅ Conexión exitosa a MongoDB Local');
-        } catch (localError) {
-            if (ATLAS_URI) {
-                await mongoose.connect(ATLAS_URI, mongoOptions);
-                console.log('✅ Conexión exitosa a MongoDB Atlas');
-            } else {
-                throw new Error('No se pudo conectar a MongoDB Local ni Atlas');
+        // En producción, usar solo MongoDB Atlas
+        if (NODE_ENV === 'production') {
+            if (!ATLAS_URI) {
+                throw new Error('MONGODB_URI es requerido en producción');
+            }
+
+            await mongoose.connect(ATLAS_URI, mongoOptions);
+            console.log('✅ Conexión exitosa a MongoDB Atlas (Producción)');
+        } else {
+            // En desarrollo, intentar local primero, luego Atlas
+            const LOCAL_URI = 'mongodb://localhost:27017/AppScrum';
+
+            try {
+                await mongoose.connect(LOCAL_URI, mongoOptions);
+                console.log('✅ Conexión exitosa a MongoDB Local');
+            } catch (localError) {
+                console.log('⚠️  MongoDB local no disponible, intentando Atlas...');
+                if (ATLAS_URI) {
+                    await mongoose.connect(ATLAS_URI, mongoOptions);
+                    console.log('✅ Conexión exitosa a MongoDB Atlas');
+                } else {
+                    throw new Error('No se pudo conectar a MongoDB Local ni Atlas');
+                }
             }
         }
 

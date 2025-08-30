@@ -79,15 +79,35 @@ app.use('/api/repos', repositoriesNewRoutes);  // Nuevas rutas de repositorios o
 
 // Rutas de prueba y health check
 app.get('/', (req, res) => {
-  res.json({ message: 'Backend server is running' });
+  res.json({
+    message: 'Backend server is running',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
+});
+
+// Endpoint de prueba sin autenticación
+app.get('/api/test', (req, res) => {
+  res.json({
+    message: 'API is working!',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Manejo de errores global
