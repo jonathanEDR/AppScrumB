@@ -4,6 +4,7 @@ const router = express.Router();
 const Sprint = require('../models/Sprint');
 const BacklogItem = require('../models/BacklogItem');
 const { authenticate } = require('../middleware/authenticate');
+const mongoose = require('mongoose');
 
 // GET /api/sprints - Obtener todos los sprints
 router.get('/', async (req, res) => {
@@ -48,6 +49,11 @@ router.get('/', async (req, res) => {
 // GET /api/sprints/:id - Obtener sprint específico
 router.get('/:id', async (req, res) => {
   try {
+    // Validar que el id recibido es un ObjectId válido
+    if (!req.params.id || !mongoose.Types.ObjectId.isValid(req.params.id)) {
+      console.warn('Invalid sprint id received:', req.params.id);
+      return res.status(400).json({ error: 'ID de sprint inválido' });
+    }
     const sprint = await Sprint.findById(req.params.id)
       .populate('producto', 'nombre descripcion')
       .populate('created_by', 'firstName lastName')
