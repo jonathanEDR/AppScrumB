@@ -76,12 +76,52 @@ if (process.env.NODE_ENV === 'production') {
   console.log('   - CORS_ORIGINS:', process.env.CORS_ORIGINS ? '✅ configured' : '❌ using defaults');
 }
 
-// Configuración de CORS
+// Logging de peticiones entrantes (útil para depuración en Render)
+app.use((req, res, next) => {
+  try {
+    console.log('<< Incoming request >>', req.method, req.url, 'Origin:', req.headers.origin || 'none');
+  } catch (e) {
+    // no bloquear la aplicación por un fallo de logging
+  }
+  next();
+});
+
+// Configuración de CORS con función para depuración (muestra si el origen es aceptado/rechazado)
 app.use(cors({
-  origin: corsOrigins,
+  origin: (origin, callback) => {
+    // Allow non-browser requests (e.g., server-to-server) where origin is undefined
+    if (!origin) return callback(null, true);
+    // Exact match
+    if (corsOrigins.includes(origin)) {
+      console.log('CORS allow origin (exact):', origin);
+      return callback(null, true);
+    }
+
+    // Allow localhost variations for dev
+    if (/localhost(:[0-9]+)?$/.test(origin)) {
+      console.log('CORS allow origin (localhost):', origin);
+      return callback(null, true);
+    }
+
+    // Allow vercel subdomains (frontend often hosted in vercel)
+    try {
+      const urlObj = new URL(origin);
+      if (urlObj.hostname.endsWith('.vercel.app')) {
+        console.log('CORS allow origin (vercel):', origin);
+        return callback(null, true);
+      }
+    } catch (e) {
+      // ignore URL parse errors
+    }
+
+    console.warn('CORS reject origin:', origin);
+    // Instead of throwing an Error (which can break preflight), deny gracefully
+    return callback(null, false);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+  optionsSuccessStatus: 200
 }));
 
 app.use(bodyParser.json());// Analizar solicitudes con cuerpo JSON
