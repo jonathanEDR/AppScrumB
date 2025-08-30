@@ -37,7 +37,17 @@ server.keepAliveTimeout = 120000; // 120 segundos
 server.headersTimeout = 120000; // 120 segundos
 
 // Leer orígenes de CORS desde .env y convertirlos en array
-const corsOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const corsOrigins = process.env.CORS_ORIGINS ? 
+  process.env.CORS_ORIGINS.split(',') : 
+  ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://appscrumb-nine.vercel.app'];
+
+// Configuración de CORS
+app.use(cors({
+  origin: corsOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 
 // Middleware para CORS y Body Parser
 app.use(cors({
