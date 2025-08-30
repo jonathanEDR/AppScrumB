@@ -10,6 +10,22 @@ mongoose.set('strictQuery', false);
 
 // Importar y ejecutar la conexión a MongoDB
 const connectDB = require('./config/database');
+const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
+const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
+const productsRoutes = require('./routes/products');  // Rutas de productos
+const backlogRoutes = require('./routes/backlog');  // Rutas de backlog
+const releasesRoutes = require('./routes/releases');  // Rutas de releases
+const sprintsRoutes = require('./routes/sprints');  // Rutas de sprints
+const metricasRoutes = require('./routes/metrics');  // Rutas de métricas
+const impedimentsRoutes = require('./routes/impediments');  // Rutas de impedimentos
+const ceremoniesRoutes = require('./routes/ceremonies');  // Rutas de ceremonias
+const teamRoutes = require('./routes/team');  // Rutas de equipo
+const developersRoutes = require('./routes/developers');  // Rutas de developers
+const timeTrackingRoutes = require('./routes/timeTracking');  // Rutas de time tracking
+const bugReportsRoutes = require('./routes/bugReports');  // Rutas de bug reports
+const usersRoutes = require('./routes/users');  // Rutas de usuarios
+const repositoriesRoutes = require('./routes/repositories');  // Rutas de repositorios
+const repositoriesNewRoutes = require('./routes/repositoriesNew');  // Nuevas rutas de repositorios
 
 // Función para iniciar el servidor después de conectar a MongoDB
 const startServer = async () => {
@@ -34,22 +50,6 @@ const startServer = async () => {
 
 // Iniciar el servidor
 startServer();
-const authRoutes = require('./routes/auth');  // Importar las rutas de autenticación
-const adminRoutes = require('./routes/admin');  // Importa las rutas de admin
-const productsRoutes = require('./routes/products');  // Rutas de productos
-const backlogRoutes = require('./routes/backlog');  // Rutas de backlog
-const releasesRoutes = require('./routes/releases');  // Rutas de releases
-const sprintsRoutes = require('./routes/sprints');  // Rutas de sprints
-const metricasRoutes = require('./routes/metrics');  // Rutas de métricas
-const impedimentsRoutes = require('./routes/impediments');  // Rutas de impedimentos
-const ceremoniesRoutes = require('./routes/ceremonies');  // Rutas de ceremonias
-const teamRoutes = require('./routes/team');  // Rutas de equipo
-const developersRoutes = require('./routes/developers');  // Rutas de developers
-const timeTrackingRoutes = require('./routes/timeTracking');  // Rutas de time tracking
-const bugReportsRoutes = require('./routes/bugReports');  // Rutas de bug reports
-const usersRoutes = require('./routes/users');  // Rutas de usuarios
-const repositoriesRoutes = require('./routes/repositories');  // Rutas de repositorios
-const repositoriesNewRoutes = require('./routes/repositoriesNew');  // Nuevas rutas de repositorios
 
 
 const app = express();
