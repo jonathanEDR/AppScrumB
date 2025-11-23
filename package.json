@@ -22,24 +22,46 @@
     "check:status": "node scripts/checkStatus.js",
     "setup:complete": "npm run clean:testing && npm run seed:productos && npm run seed:backlog && npm run setup:testing && npm run assign:stories && npm run create:technical",
     "build": "npm install",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --coverage --verbose",
+    "test:watch": "jest --watch",
+    "test:developers": "jest tests/developers.test.js",
+    "test:unit": "jest --testPathPattern=unit",
+    "test:integration": "jest --testPathPattern=integration",
+    "optimize:db": "node scripts/optimizeDatabase.js",
+    "cloudinary:clean": "node scripts/cleanCloudinary.js",
+    "cloudinary:clean:dry": "node scripts/cleanCloudinary.js --dry-run",
+    "cloudinary:migrate": "node scripts/migrateToCloudinary.js",
+    "cloudinary:migrate:dry": "node scripts/migrateToCloudinary.js --dry-run"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@clerk/clerk-sdk-node": "^5.1.6",
-    "@octokit/rest": "^22.0.0",
+    "@clerk/clerk-sdk-node": "^5.0.58",
+    "@clerk/express": "^1.7.52",
     "body-parser": "^2.2.0",
+    "cloudinary": "^1.41.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "express-validator": "^7.3.1",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.14.0",
-    "multer": "^2.0.1"
+    "multer": "^2.0.2",
+    "multer-storage-cloudinary": "^4.0.0",
+    "node-cache": "^5.1.2",
+    "winston": "^3.18.3",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "@types/jest": "^30.0.0",
+    "jest": "^30.2.0",
+    "mongodb-memory-server": "^10.3.0",
+    "nodemon": "^3.1.10",
+    "supertest": "^7.1.4"
   }
 }

@@ -16,17 +16,23 @@
 Este backend provee servicios RESTful para la aplicación AppScrum, permitiendo la gestión de usuarios, autenticación, roles y notas, integrando seguridad y buenas prácticas para equipos ágiles.
 
 ## Características
-- API REST con Express
-- Autenticación y autorización por roles
-- Gestión de usuarios y notas
+- API REST con Express 5.1
+- Autenticación y autorización por roles (Clerk)
+- Gestión completa de proyectos Scrum
+  - Product Backlog
+  - Sprint Planning y Tracking
+  - Time Tracking para developers
+  - Bug Reports
+  - Métricas y estadísticas
 - Middleware de seguridad y validación
 - Estructura modular y escalable
+- **Nota:** La integración con Git/GitHub ha sido removida en v2.0
 
 ## Tecnologías
-- Node.js
-- Express
-- (Agregar base de datos utilizada, ej. MongoDB, PostgreSQL)
-- Clerk (para autenticación, si aplica)
+- Node.js v18+
+- Express 5.1.0
+- MongoDB (Mongoose 8.14.0)
+- Clerk (autenticación y autorización)
 
 ## Instalación
 

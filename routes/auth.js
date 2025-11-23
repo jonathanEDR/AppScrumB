@@ -3,7 +3,8 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const { clerkClient } = require('@clerk/clerk-sdk-node');
-const { authenticate } = require('../middleware/authenticate');
+const { authenticate, RolePermissionsService, ROLES } = require('../middleware/authenticate');
+const authService = require('../services/authService');
 const router = express.Router();
 
 // Ruta para obtener usuario por ClerkId
@@ -11,12 +12,28 @@ router.get('/user/:clerkId', authenticate, async (req, res) => {
   try {
     const user = await User.findOne({ clerk_id: req.params.clerkId });
     if (!user) {
-      return res.status(404).json({ message: 'Usuario no encontrado' });
+      return res.status(404).json({ 
+        status: 'error',
+        code: 'USER_NOT_FOUND',
+        message: 'Usuario no encontrado' 
+      });
     }
-    res.json(user);
+    
+    // Incluir permisos en la respuesta
+    res.json({
+      status: 'success',
+      user: {
+        ...user.toObject(),
+        permissions: RolePermissionsService.getPermissions(user.role)
+      }
+    });
   } catch (error) {
     console.error('Error al buscar usuario:', error);
-    res.status(500).json({ message: 'Error al buscar usuario' });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error al buscar usuario',
+      error: error.message 
+    });
   }
 });
 
@@ -29,46 +46,50 @@ router.get('/user-profile', authenticate, async (req, res) => {
     
     if (!req.user || !req.user.clerk_id) {
       console.log('Invalid user object:', req.user);
-      return res.status(400).json({ message: 'Información de usuario inválida' });
+      return res.status(400).json({ 
+        status: 'error',
+        code: 'INVALID_USER',
+        message: 'Información de usuario inválida' 
+      });
     }
     
     console.log('Searching for user with clerk_id:', req.user.clerk_id);
 
+    // El usuario ya existe porque el middleware authenticate lo verificó/creó
     const user = await User.findOne({ clerk_id: req.user.clerk_id });
     
     if (!user) {
-      console.log('User not found in database:', req.user.clerk_id);
-      // Crear usuario si no existe
-      const newUser = new User({
-        clerk_id: req.user.clerk_id,
-        email: req.user.email,
-        role: 'user' // rol por defecto
-      });
-      await newUser.save();
-      return res.json({ 
-        message: 'Nuevo usuario creado',
-        user: newUser 
+      // Esto no debería suceder, pero por si acaso
+      return res.status(404).json({
+        status: 'error',
+        code: 'USER_NOT_FOUND',
+        message: 'Usuario no encontrado'
       });
     }
     
     res.json({ 
+      status: 'success',
       message: 'Perfil de usuario obtenido exitosamente',
       user: {
-        ...user.toObject(),
-        permissions: {
-          can_create_notes: true,
-          can_edit_own_notes: true,
-          can_view_all_notes: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role),
-          can_edit_all_notes: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role),
-          can_delete_notes: ['super_admin', 'product_owner'].includes(user.role),
-          can_manage_users: user.role === 'super_admin',
-          can_view_dashboard: ['super_admin', 'product_owner', 'scrum_master'].includes(user.role)
-        }
+        _id: user._id,
+        clerk_id: user.clerk_id,
+        email: user.email,
+        nombre_negocio: user.nombre_negocio,
+        role: user.role,
+        is_active: user.is_active,
+        fecha_creacion: user.fecha_creacion,
+        updated_at: user.updated_at,
+        permissions: RolePermissionsService.getPermissions(user.role),
+        roleInfo: RolePermissionsService.getRoleInfo(user.role)
       }
     });
   } catch (error) {
     console.error('Error obteniendo perfil:', error);
-    res.status(500).json({ message: 'Error al obtener perfil', error: error.message });
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Error al obtener perfil', 
+      error: error.message 
+    });
   }
 });
 

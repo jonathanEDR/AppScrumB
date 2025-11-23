@@ -87,12 +87,14 @@ const validateTaskStatusUpdate = (req, res, next) => {
  * Validación para creación de reporte de bug
  */
 const validateBugReport = (req, res, next) => {
-  const { title, description, priority, type } = req.body;
+  const { title, description, priority, type, actualBehavior } = req.body;
   const errors = [];
 
   // Validar campos requeridos
   if (!title || title.trim().length === 0) {
     errors.push('El título es requerido');
+  } else if (title.length < 5) {
+    errors.push('El título debe tener al menos 5 caracteres');
   } else if (title.length > 200) {
     errors.push('El título no puede tener más de 200 caracteres');
   }
@@ -103,6 +105,13 @@ const validateBugReport = (req, res, next) => {
     errors.push('La descripción no puede tener más de 2000 caracteres');
   }
 
+  // Validar actualBehavior (requerido en el modelo)
+  if (!actualBehavior || actualBehavior.trim().length === 0) {
+    errors.push('El comportamiento actual (actualBehavior) es requerido');
+  } else if (actualBehavior.length > 1000) {
+    errors.push('El comportamiento actual no puede tener más de 1000 caracteres');
+  }
+
   // Validar prioridad
   const validPriorities = ['low', 'medium', 'high', 'critical'];
   if (priority && !validPriorities.includes(priority)) {
@@ -110,7 +119,7 @@ const validateBugReport = (req, res, next) => {
   }
 
   // Validar tipo
-  const validTypes = ['bug', 'feature_request', 'improvement', 'question'];
+  const validTypes = ['bug', 'feature', 'improvement', 'security'];
   if (type && !validTypes.includes(type)) {
     errors.push(`Tipo inválido. Valores válidos: ${validTypes.join(', ')}`);
   }

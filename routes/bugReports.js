@@ -3,35 +3,18 @@ const router = express.Router();
 const { authenticate } = require('../middleware/authenticate');
 const BugReport = require('../models/BugReport');
 const multer = require('multer');
-const path = require('path');
+const { bugReportsStorage } = require('../config/cloudinaryConfig');
+const uploadService = require('../services/uploadService');
+const { 
+  uploadConfigs, 
+  handleMulterError 
+} = require('../middleware/imageValidation');
 
-// Configuración de multer para archivos adjuntos
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/bug-reports/');
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
+// Configuración de multer con Cloudinary
 const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB límite
-  },
-  fileFilter: function (req, file, cb) {
-    const allowedTypes = /jpeg|jpg|png|gif|pdf|txt|log|doc|docx/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Tipo de archivo no permitido'));
-    }
-  }
+  storage: bugReportsStorage,
+  limits: uploadConfigs.bugReports.limits,
+  fileFilter: uploadConfigs.bugReports.fileFilter
 });
 
 // Middleware para verificar rol de developer
@@ -148,7 +131,7 @@ router.get('/:id', authenticate, requireDeveloperRole, async (req, res) => {
 });
 
 // POST /api/developers/bugs - Crear nuevo bug report
-router.post('/', authenticate, requireDeveloperRole, upload.array('attachments', 5), async (req, res) => {
+router.post('/', authenticate, requireDeveloperRole, upload.array('attachments', 5), handleMulterError, async (req, res) => {
   try {
     const {
       title,
@@ -172,16 +155,25 @@ router.post('/', authenticate, requireDeveloperRole, upload.array('attachments',
       });
     }
 
-    // Procesar archivos adjuntos
+    // Procesar archivos adjuntos con Cloudinary
     const attachments = [];
     if (req.files && req.files.length > 0) {
       req.files.forEach(file => {
+        // Los archivos ya están en Cloudinary gracias a multer-storage-cloudinary
         attachments.push({
           filename: file.filename,
           originalName: file.originalname,
           mimeType: file.mimetype,
           size: file.size,
-          path: file.path
+          url: file.path, // URL de Cloudinary
+          publicId: file.filename, // Public ID de Cloudinary
+          cloudinaryData: {
+            publicId: file.filename,
+            url: file.path,
+            secureUrl: file.path,
+            format: file.originalname.split('.').pop(),
+            resourceType: file.mimetype.startsWith('image/') ? 'image' : 'raw'
+          }
         });
       });
     }
@@ -237,6 +229,15 @@ router.post('/', authenticate, requireDeveloperRole, upload.array('attachments',
 
   } catch (error) {
     console.error('Error al crear bug report:', error);
+    
+    // Si hay error y se subieron archivos, intentar limpiarlos
+    if (req.files && req.files.length > 0) {
+      const publicIds = req.files.map(f => f.filename);
+      uploadService.deleteMultipleFiles(publicIds, 'raw').catch(err => 
+        console.error('Error limpiando archivos después de fallo:', err)
+      );
+    }
+    
     if (error.name === 'ValidationError') {
       return res.status(400).json({ error: error.message });
     }

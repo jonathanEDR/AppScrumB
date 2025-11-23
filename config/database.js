@@ -7,14 +7,10 @@ const connectDB = async () => {
         const NODE_ENV = process.env.NODE_ENV || 'development';
 
         const mongoOptions = {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
             serverSelectionTimeoutMS: 5000,
             socketTimeoutMS: 45000,
             maxPoolSize: 10
         };
-
-        console.log(`MongoDB connect - NODE_ENV=${NODE_ENV} - ATLAS_URI configured=${!!ATLAS_URI}`);
 
         // En producción, usar solo MongoDB Atlas
         if (NODE_ENV === 'production') {
@@ -23,19 +19,15 @@ const connectDB = async () => {
             }
 
             await mongoose.connect(ATLAS_URI, mongoOptions);
-            console.log('✅ Conexión exitosa a MongoDB Atlas (Producción)');
         } else {
             // En desarrollo, intentar local primero, luego Atlas
             const LOCAL_URI = 'mongodb://localhost:27017/AppScrum';
 
             try {
                 await mongoose.connect(LOCAL_URI, mongoOptions);
-                console.log('✅ Conexión exitosa a MongoDB Local');
             } catch (localError) {
-                console.log('⚠️  MongoDB local no disponible, intentando Atlas...');
                 if (ATLAS_URI) {
                     await mongoose.connect(ATLAS_URI, mongoOptions);
-                    console.log('✅ Conexión exitosa a MongoDB Atlas');
                 } else {
                     throw new Error('No se pudo conectar a MongoDB Local ni Atlas');
                 }

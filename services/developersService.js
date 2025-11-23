@@ -1,9 +1,6 @@
 const Task = require('../models/Task');
 const TimeTracking = require('../models/TimeTracking');
 const BugReport = require('../models/BugReport');
-const Commit = require('../models/Commit');
-const PullRequest = require('../models/PullRequest');
-const Repository = require('../models/Repository');
 const Sprint = require('../models/Sprint');
 const TeamMember = require('../models/TeamMember');
 
@@ -65,24 +62,12 @@ class DevelopersService {
         resolvedAt: { $gte: startOfWeek }
       });
 
-      // Commits esta semana
-      const commitsThisWeek = await Commit.countDocuments({
-        'author.user': userId,
-        createdAt: { $gte: startOfWeek }
-      });
-
       // Horas trabajadas esta semana
       const timeEntries = await TimeTracking.find({
         user: userId,
         date: { $gte: startOfWeek }
       });
       const hoursWorkedThisWeek = timeEntries.reduce((total, entry) => total + entry.hours, 0);
-
-      // Pull requests activos
-      const activePRs = await PullRequest.countDocuments({
-        author: userId,
-        status: { $in: ['draft', 'open', 'review'] }
-      });
 
       // Tareas recientes
       const recentTasks = await Task.find({
@@ -98,9 +83,7 @@ class DevelopersService {
           assignedTasks,
           completedToday,
           bugsResolvedThisWeek,
-          commitsThisWeek,
-          hoursWorkedThisWeek: Math.round(hoursWorkedThisWeek * 10) / 10,
-          activePRs
+          hoursWorkedThisWeek: Math.round(hoursWorkedThisWeek * 10) / 10
         },
         recentTasks
       };
@@ -325,38 +308,46 @@ class DevelopersService {
   async getTimeTrackingStats(userId, period = 'week') {
     try {
       const now = new Date();
-      let startDate;
+      
+      // Calcular estadísticas por período
+      const getHoursForPeriod = async (daysBack) => {
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - daysBack);
+        startDate.setHours(0, 0, 0, 0);
+        
+        const entries = await TimeTracking.find({
+          user: userId,
+          date: { $gte: startDate }
+        });
+        
+        return entries.reduce((total, entry) => total + (entry.hours || 0), 0);
+      };
 
-      switch (period) {
-        case 'week':
-          startDate = new Date(now.setDate(now.getDate() - now.getDay()));
-          break;
-        case 'month':
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-          break;
-        case 'quarter':
-          const quarter = Math.floor(now.getMonth() / 3);
-          startDate = new Date(now.getFullYear(), quarter * 3, 1);
-          break;
-        default:
-          startDate = new Date(now.setDate(now.getDate() - 7));
-      }
+      // Obtener horas por período
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const entriesToday = await TimeTracking.find({
+        user: userId,
+        date: { $gte: today }
+      });
+      
+      const totalHoursToday = entriesToday.reduce((total, entry) => total + (entry.hours || 0), 0);
+      const totalHoursWeek = await getHoursForPeriod(7);
+      const totalHoursMonth = await getHoursForPeriod(30);
 
+      // Para compatibilidad con código existente, también incluir totalHours
       const timeEntries = await TimeTracking.find({
         user: userId,
-        date: { $gte: startDate }
+        date: { $gte: new Date(now.setDate(now.getDate() - 7)) }
       }).populate('task', 'title type');
 
-      const totalHours = timeEntries.reduce((total, entry) => total + entry.hours, 0);
-      
-      // Agrupar por tipo de tarea
       const hoursByType = timeEntries.reduce((acc, entry) => {
         const type = entry.task?.type || 'other';
         acc[type] = (acc[type] || 0) + entry.hours;
         return acc;
       }, {});
 
-      // Agrupar por día
       const hoursByDay = timeEntries.reduce((acc, entry) => {
         const day = entry.date.toISOString().split('T')[0];
         acc[day] = (acc[day] || 0) + entry.hours;
@@ -364,34 +355,17 @@ class DevelopersService {
       }, {});
 
       return {
-        totalHours: Math.round(totalHours * 10) / 10,
-        averagePerDay: Math.round((totalHours / 7) * 10) / 10,
+        totalHoursToday: Math.round(totalHoursToday * 10) / 10,
+        totalHoursWeek: Math.round(totalHoursWeek * 10) / 10,
+        totalHoursMonth: Math.round(totalHoursMonth * 10) / 10,
+        totalHours: Math.round(totalHoursWeek * 10) / 10,
+        averagePerDay: Math.round((totalHoursWeek / 7) * 10) / 10,
         hoursByType,
         hoursByDay,
         entries: timeEntries
       };
     } catch (error) {
       throw new Error(`Error al obtener estadísticas de time tracking: ${error.message}`);
-    }
-  }
-
-  /**
-   * Obtiene los repositorios del developer
-   */
-  async getDeveloperRepositories(userId) {
-    try {
-      const repositories = await Repository.find({
-        $or: [
-          { 'contributors.user': userId },
-          { maintainers: userId }
-        ]
-      }).populate('project', 'nombre')
-        .populate('maintainers', 'firstName lastName')
-        .populate('contributors.user', 'firstName lastName');
-
-      return repositories;
-    } catch (error) {
-      throw new Error(`Error al obtener repositorios: ${error.message}`);
     }
   }
 
@@ -508,7 +482,7 @@ class DevelopersService {
   /**
    * Obtiene entradas de time tracking con filtros
    */
-  async getTimeEntries(userId, filters = {}) {
+  async getTimeEntries(userId, filters = {}, options = {}) {
     try {
       const query = { user: userId };
 
@@ -534,9 +508,13 @@ class DevelopersService {
         };
       }
 
+      const { skip = 0, limit = 20 } = options;
+
       const entries = await TimeTracking.find(query)
         .populate('task', 'title type priority')
-        .sort({ date: -1, startTime: -1 });
+        .sort({ date: -1, startTime: -1 })
+        .skip(skip)
+        .limit(limit);
 
       return entries;
     } catch (error) {
@@ -545,14 +523,55 @@ class DevelopersService {
   }
 
   /**
+   * Cuenta entradas de time tracking con filtros
+   */
+  async countTimeEntries(userId, filters = {}) {
+    try {
+      const query = { user: userId };
+
+      if (filters.taskId) {
+        query.task = filters.taskId;
+      }
+
+      if (filters.date) {
+        const startDate = new Date(filters.date);
+        const endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + 1);
+        
+        query.date = {
+          $gte: startDate,
+          $lt: endDate
+        };
+      }
+
+      if (filters.startDate && filters.endDate) {
+        query.date = {
+          $gte: new Date(filters.startDate),
+          $lte: new Date(filters.endDate)
+        };
+      }
+
+      return await TimeTracking.countDocuments(query);
+    } catch (error) {
+      throw new Error(`Error al contar entradas de tiempo: ${error.message}`);
+    }
+  }
+
+  /**
    * Actualiza una entrada de time tracking
    */
   async updateTimeEntry(entryId, userId, updateData) {
     try {
-      const entry = await TimeTracking.findOne({ _id: entryId, user: userId });
+      // Primero verificar si existe la entrada
+      const entry = await TimeTracking.findById(entryId);
       
       if (!entry) {
         throw new Error('Entrada de tiempo no encontrada');
+      }
+
+      // Verificar si pertenece al usuario
+      if (entry.user.toString() !== userId.toString()) {
+        throw new Error('No tienes permisos para actualizar esta entrada');
       }
 
       // No permitir actualizar entradas de timer activo
@@ -589,11 +608,19 @@ class DevelopersService {
    */
   async deleteTimeEntry(entryId, userId) {
     try {
-      const entry = await TimeTracking.findOneAndDelete({ _id: entryId, user: userId });
+      // Primero verificar si existe la entrada
+      const entry = await TimeTracking.findById(entryId);
       
       if (!entry) {
         throw new Error('Entrada de tiempo no encontrada');
       }
+
+      // Verificar si pertenece al usuario
+      if (entry.user.toString() !== userId.toString()) {
+        throw new Error('No tienes permisos para eliminar esta entrada');
+      }
+
+      await TimeTracking.findByIdAndDelete(entryId);
 
       return { message: 'Entrada de tiempo eliminada correctamente' };
     } catch (error) {
@@ -606,7 +633,7 @@ class DevelopersService {
    */
   async getBugReports(userId, filters = {}) {
     try {
-      const query = { reporter: userId };
+      const query = { reportedBy: userId }; // Usar reportedBy en lugar de reporter
 
       if (filters.status) {
         query.status = filters.status;
@@ -620,10 +647,14 @@ class DevelopersService {
         query.project = filters.project;
       }
 
+      if (filters.severity) {
+        query.severity = filters.severity;
+      }
+
       const bugReports = await BugReport.find(query)
         .populate('project', 'nombre')
         .populate('assignedTo', 'firstName lastName')
-        .populate('sprint', 'name')
+        .populate('sprint', 'nombre')
         .sort({ createdAt: -1 });
 
       return bugReports;
@@ -660,79 +691,27 @@ class DevelopersService {
         actualBehavior,
         environment,
         project,
-        reporter: userId,
+        reportedBy: userId, // Usar reportedBy en lugar de reporter
         status: 'open',
         attachments: attachments || []
       });
 
       await bugReport.save();
-      await bugReport.populate([
-        { path: 'project', select: 'nombre' },
-        { path: 'reporter', select: 'firstName lastName' }
-      ]);
+      
+      // Populate solo si el campo existe
+      const populateFields = [
+        { path: 'reportedBy', select: 'firstName lastName' }
+      ];
+      
+      if (bugReport.project) {
+        populateFields.push({ path: 'project', select: 'nombre' });
+      }
+      
+      await bugReport.populate(populateFields);
 
       return bugReport;
     } catch (error) {
       throw new Error(`Error al crear reporte de bug: ${error.message}`);
-    }
-  }
-
-  /**
-   * Obtiene commits del developer
-   */
-  async getCommitHistory(userId, filters = {}) {
-    try {
-      const query = { 'author.user': userId };
-
-      if (filters.repository) {
-        query.repository = filters.repository;
-      }
-
-      if (filters.branch) {
-        query.branch = filters.branch;
-      }
-
-      if (filters.startDate && filters.endDate) {
-        query.createdAt = {
-          $gte: new Date(filters.startDate),
-          $lte: new Date(filters.endDate)
-        };
-      }
-
-      const commits = await Commit.find(query)
-        .populate('repository', 'name url')
-        .sort({ createdAt: -1 })
-        .limit(50);
-
-      return commits;
-    } catch (error) {
-      throw new Error(`Error al obtener historial de commits: ${error.message}`);
-    }
-  }
-
-  /**
-   * Obtiene pull requests del developer
-   */
-  async getPullRequests(userId, filters = {}) {
-    try {
-      const query = { author: userId };
-
-      if (filters.status) {
-        query.status = filters.status;
-      }
-
-      if (filters.repository) {
-        query.repository = filters.repository;
-      }
-
-      const pullRequests = await PullRequest.find(query)
-        .populate('repository', 'name url')
-        .populate('assignedReviewers', 'firstName lastName')
-        .sort({ createdAt: -1 });
-
-      return pullRequests;
-    } catch (error) {
-      throw new Error(`Error al obtener pull requests: ${error.message}`);
     }
   }
 
@@ -745,6 +724,20 @@ class DevelopersService {
         user: userId,
         endTime: null
       }).populate('task', 'title type priority');
+
+      if (activeTimer) {
+        // Calcular tiempo transcurrido
+        const now = new Date();
+        const elapsedMs = now - activeTimer.startTime;
+        const elapsedMinutes = Math.round(elapsedMs / (1000 * 60));
+        
+        // Convertir a objeto plano para poder agregar campos
+        const timerObj = activeTimer.toObject();
+        timerObj.elapsedMinutes = elapsedMinutes;
+        timerObj.elapsedHours = Math.round((elapsedMinutes / 60) * 10) / 10;
+        
+        return timerObj;
+      }
 
       return activeTimer;
     } catch (error) {

@@ -1,12 +1,16 @@
 const User = require('../models/User');
 const { clerkClient } = require('@clerk/clerk-sdk-node');
 const mongoose = require('mongoose');
+const { RolePermissionsService, ROLES } = require('./rolePermissionsService');
 
 class AuthService {
   // Verifica y obtiene la información del usuario de Clerk
   async verifyToken(token) {
     try {
-      const session = await clerkClient.verifyToken(token);
+      // Agregar tolerancia para clock skew (10 segundos)
+      const session = await clerkClient.verifyToken(token, {
+        clockSkewInMs: 10000 // Tolerar 10 segundos de diferencia de reloj
+      });
       if (!session) {
         throw new Error('Token inválido');
       }
@@ -31,17 +35,66 @@ class AuthService {
       let user = await User.findOne({ clerk_id: clerkId });
 
       if (!user) {
+        // Obtener rol de metadata de Clerk si existe
+        let clerkUser;
+        try {
+          clerkUser = await clerkClient.users.getUser(clerkId);
+        } catch (clerkError) {
+          console.warn('No se pudo obtener usuario de Clerk:', clerkError.message);
+        }
+
+        // Determinar el rol inicial
+        let initialRole = ROLES.USER; // Rol por defecto
+        
+        if (clerkUser?.publicMetadata?.role) {
+          // Normalizar el rol usando el servicio
+          initialRole = RolePermissionsService.normalizeRole(clerkUser.publicMetadata.role);
+        }
+
         // Crear nuevo usuario si no existe
         user = new User({
           clerk_id: clerkId,
           email: userEmail,
           nombre_negocio: firstName || 'Usuario',
-          role: 'user',
+          role: initialRole,
           is_active: true
         });
 
         await user.save();
-        console.log('Usuario creado:', user._id);
+        console.log('Usuario creado con rol:', user.role);
+
+        // Sincronizar rol en Clerk
+        try {
+          await clerkClient.users.updateUser(clerkId, {
+            publicMetadata: { 
+              role: user.role,
+              synced: true,
+              syncedAt: new Date().toISOString()
+            }
+          });
+        } catch (syncError) {
+          console.warn('No se pudo sincronizar rol en Clerk:', syncError.message);
+        }
+      } else {
+        // Usuario existe, verificar sincronización de rol con Clerk
+        try {
+          const clerkUser = await clerkClient.users.getUser(clerkId);
+          const clerkRole = clerkUser?.publicMetadata?.role;
+          
+          // Si el rol en Clerk es diferente al de la BD, usar el de la BD como fuente de verdad
+          if (clerkRole && clerkRole !== user.role) {
+            console.log(`Sincronizando rol en Clerk: ${clerkRole} -> ${user.role}`);
+            await clerkClient.users.updateUser(clerkId, {
+              publicMetadata: { 
+                role: user.role,
+                synced: true,
+                syncedAt: new Date().toISOString()
+              }
+            });
+          }
+        } catch (syncError) {
+          console.warn('No se pudo verificar sincronización con Clerk:', syncError.message);
+        }
       }
 
       return user;
@@ -79,11 +132,19 @@ class AuthService {
   }
 
   // Actualiza el rol del usuario
-  async updateUserRole(clerkId, role) {
+  async updateUserRole(clerkId, newRole) {
     try {
+      // Normalizar el rol
+      const normalizedRole = RolePermissionsService.normalizeRole(newRole);
+      
+      // Validar que el rol sea válido
+      if (!RolePermissionsService.isValidRole(normalizedRole)) {
+        throw new Error(`Rol inválido: ${newRole}`);
+      }
+
       const user = await User.findOneAndUpdate(
         { clerk_id: clerkId },
-        { role },
+        { role: normalizedRole, updated_at: Date.now() },
         { new: true }
       );
 
@@ -91,14 +152,39 @@ class AuthService {
         throw new Error('Usuario no encontrado');
       }
 
-      // Actualizar también en Clerk
-      await clerkClient.users.updateUser(clerkId, {
-        publicMetadata: { role }
-      });
+      // Sincronizar con Clerk
+      try {
+        await clerkClient.users.updateUser(clerkId, {
+          publicMetadata: { 
+            role: normalizedRole,
+            synced: true,
+            syncedAt: new Date().toISOString()
+          }
+        });
+      } catch (clerkError) {
+        console.warn('No se pudo actualizar rol en Clerk:', clerkError.message);
+      }
 
       return user;
     } catch (error) {
       console.error('Error actualizando rol:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Obtiene los permisos de un usuario
+   */
+  async getUserPermissions(clerkId) {
+    try {
+      const user = await User.findOne({ clerk_id: clerkId });
+      if (!user) {
+        throw new Error('Usuario no encontrado');
+      }
+
+      return RolePermissionsService.getPermissions(user.role);
+    } catch (error) {
+      console.error('Error obteniendo permisos:', error);
       throw error;
     }
   }

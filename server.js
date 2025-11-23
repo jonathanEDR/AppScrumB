@@ -3,10 +3,38 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
+
+// Suprimir temporalmente stderr para evitar warning de Clerk en producción
+const originalStderrWrite = process.stderr.write.bind(process.stderr);
+if (process.env.NODE_ENV === 'production') {
+  process.stderr.write = (chunk, encoding, callback) => {
+    if (chunk.toString().includes('Node SDK is entering a three-month notice')) {
+      // Silenciar solo el warning de migración de Clerk
+      if (callback) callback();
+      return true;
+    }
+    return originalStderrWrite(chunk, encoding, callback);
+  };
+}
+
 const { clerkClient } = require('@clerk/clerk-sdk-node');
+
+// Restaurar stderr después de cargar Clerk
+if (process.env.NODE_ENV === 'production') {
+  process.stderr.write = originalStderrWrite;
+}
+
+const compression = require('compression');
+const helmet = require('helmet');
 
 // Configuración de Mongoose
 mongoose.set('strictQuery', false);
+
+// Importar logger y configuraciones de optimización
+const logger = require('./config/logger');
+const { generalLimiter } = require('./config/rateLimiter');
+const { addDatabaseIndexes } = require('./config/databaseOptimization');
+const { verifyCloudinaryConfig } = require('./config/cloudinaryConfig');
 
 // Importar y ejecutar la conexión a MongoDB
 const connectDB = require('./config/database');
@@ -24,33 +52,10 @@ const developersRoutes = require('./routes/developers');  // Rutas de developers
 const timeTrackingRoutes = require('./routes/timeTracking');  // Rutas de time tracking
 const bugReportsRoutes = require('./routes/bugReports');  // Rutas de bug reports
 const usersRoutes = require('./routes/users');  // Rutas de usuarios
-const repositoriesRoutes = require('./routes/repositories');  // Rutas de repositorios
-const repositoriesNewRoutes = require('./routes/repositoriesNew');  // Nuevas rutas de repositorios
-
-// Función para iniciar el servidor después de conectar a MongoDB
-const startServer = async () => {
-  try {
-    // Esperar a que MongoDB se conecte
-    await connectDB();
-
-    // Una vez conectado, iniciar el servidor
-    server.listen(port, '0.0.0.0', () => {
-      console.log(`🚀 Servidor corriendo en el puerto ${port}`);
-      console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`📡 Puerto: ${port}`);
-      console.log(`🔗 MongoDB: ${mongoose.connection.readyState === 1 ? 'conectado' : 'desconectado'}`);
-      console.log(`🔧 CORS Origins: ${corsOrigins.join(', ')}`);
-      console.log('✅ Servidor listo para recibir conexiones');
-    });
-  } catch (error) {
-    console.error('❌ Error al iniciar el servidor:', error);
-    process.exit(1);
-  }
-};
-
-// Iniciar el servidor
-startServer();
-
+const diagnosticsRoutes = require('./routes/diagnostics');  // Rutas de diagnóstico
+const systemConfigRoutes = require('./routes/systemConfig');  // Rutas de configuración del sistema
+const cloudinaryRoutes = require('./routes/cloudinary');  // Rutas de gestión de Cloudinary
+const profileRoutes = require('./routes/profile');  // Rutas de perfil/CV
 
 const app = express();
 const port = process.env.PORT || 5000;  // Usar el puerto de la variable de entorno o el 5000 por defecto
@@ -65,16 +70,78 @@ const corsOrigins = process.env.CORS_ORIGINS ?
   process.env.CORS_ORIGINS.split(',') :
   ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://appscrumb-nine.vercel.app'];
 
+// Función para iniciar el servidor después de conectar a MongoDB
+const startServer = async () => {
+  try {
+    // Esperar a que MongoDB se conecte
+    await connectDB();
+
+    // Crear índices de base de datos para optimización
+    await addDatabaseIndexes();
+
+    // Verificar configuración de Cloudinary
+    const cloudinaryReady = await verifyCloudinaryConfig();
+
+    // Una vez conectado, iniciar el servidor
+    server.listen(port, '0.0.0.0', () => {
+      logger.info('Server started successfully', {
+        context: 'Server',
+        port,
+        environment: process.env.NODE_ENV || 'development',
+        mongoStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        cloudinaryStatus: cloudinaryReady ? 'configured' : 'not configured',
+        corsOrigins: corsOrigins.join(', ')
+      });
+      
+      console.log(`\n✅ AppScrum Backend Server`);
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+      console.log(`🚀 Status: Running`);
+      console.log(`📡 Port: ${port}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🔗 MongoDB: Connected`);
+      console.log(`☁️  Cloudinary: ${cloudinaryReady ? 'Connected' : 'Not Configured'}`);
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+    });
+  } catch (error) {
+    logger.error('Failed to start server', { 
+      context: 'Server', 
+      error: error.message,
+      stack: error.stack 
+    });
+    console.error('❌ Error al iniciar el servidor:', error);
+    process.exit(1);
+  }
+};
+
 // Forzar el puerto correcto en Render
 if (process.env.NODE_ENV === 'production') {
-  console.log('🚀 Running in production mode');
-  console.log('📡 Using port:', port);
-  console.log('🌐 CORS origins:', corsOrigins);
-  console.log('🔧 Environment variables check:');
-  console.log('   - MONGODB_URI:', process.env.MONGODB_URI ? '✅ configured' : '❌ missing');
-  console.log('   - CLERK_SECRET_KEY:', process.env.CLERK_SECRET_KEY ? '✅ configured' : '❌ missing');
-  console.log('   - CORS_ORIGINS:', process.env.CORS_ORIGINS ? '✅ configured' : '❌ using defaults');
+  // Silencioso en producción - logs manejados por Winston
 }
+
+// ============= MIDDLEWARE DE SEGURIDAD Y OPTIMIZACIÓN =============
+
+// Helmet - Seguridad con headers HTTP
+app.use(helmet({
+  contentSecurityPolicy: false, // Deshabilitado para APIs
+  crossOriginEmbedderPolicy: false
+}));
+
+// Compression - Compresión gzip de responses
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
+  level: 6 // Balance entre velocidad y compresión
+}));
+
+// Rate limiting general (aplicado a todas las rutas)
+app.use('/api/', generalLimiter);
+
+// Logger middleware para requests HTTP
+app.use(logger.expressMiddleware);
 
 // Logging de peticiones entrantes (útil para depuración en Render)
 app.use((req, res, next) => {
@@ -120,7 +187,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Cache-Control'],
   optionsSuccessStatus: 200
 }));
 
@@ -141,8 +208,12 @@ app.use('/api/developers', developersRoutes);  // Rutas de developers
 app.use('/api/time-tracking', timeTrackingRoutes);  // Rutas de time tracking
 app.use('/api/bug-reports', bugReportsRoutes);  // Rutas de bug reports
 app.use('/api/users', usersRoutes);  // Rutas de usuarios
-app.use('/api/repositories', repositoriesRoutes);  // Rutas de repositorios (legacy)
-app.use('/api/repos', repositoriesNewRoutes);  // Nuevas rutas de repositorios optimizadas
+app.use('/api/admin/diagnostics', diagnosticsRoutes);  // Rutas de diagnóstico (Super Admin)
+app.use('/api/system-config', systemConfigRoutes);  // Rutas de configuración del sistema
+app.use('/api/cloudinary', cloudinaryRoutes);  // Rutas de gestión de Cloudinary
+app.use('/api/profile', profileRoutes);  // Rutas de perfil/CV
+
+// NOTA: Ya no servimos archivos estáticos locales, todo está en Cloudinary
 
 // Rutas de prueba y health check
 app.get('/', (req, res) => {
@@ -199,3 +270,6 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Something broke!' });
 });
+
+// Iniciar el servidor (MOVIDO AL FINAL)
+startServer();

@@ -1,5 +1,8 @@
+// Importar tanto el SDK nuevo como el antiguo para transición gradual
 const { clerkClient } = require('@clerk/clerk-sdk-node');
+// const { clerkClient: newClerkClient } = require('@clerk/express'); // Descomentar cuando migremos
 const authService = require('../services/authService');
+const { RolePermissionsService, ROLES } = require('../services/rolePermissionsService');
 
 // Middleware principal de autenticación
 const authenticate = async (req, res, next) => {
@@ -39,7 +42,7 @@ const authenticate = async (req, res, next) => {
       });
     }
     
-    // Añadir objeto de usuario a la petición
+    // Añadir objeto de usuario a la petición con permisos
     req.user = {
       _id: user._id,
       id: user._id,   // Mantener id por compatibilidad
@@ -47,10 +50,15 @@ const authenticate = async (req, res, next) => {
       email: user.email,
       role: user.role,
       nombre_negocio: user.nombre_negocio,
-      is_active: user.is_active
+      is_active: user.is_active,
+      permissions: RolePermissionsService.getPermissions(user.role)
     };
 
-    console.log('Usuario autenticado:', req.user);
+    console.log('Usuario autenticado:', { 
+      id: req.user._id, 
+      email: req.user.email, 
+      role: req.user.role 
+    });
 
     next();
   } catch (error) {
@@ -84,16 +92,27 @@ const authenticate = async (req, res, next) => {
 };
 
 // Middleware para verificar roles específicos
-const authorize = (...roles) => {
+const authorize = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ message: 'Usuario no autenticado' });
+      return res.status(401).json({ 
+        status: 'error',
+        code: 'AUTH_REQUIRED',
+        message: 'Usuario no autenticado' 
+      });
     }
 
-    if (!roles.includes(req.user.role)) {
+    // Normalizar roles permitidos
+    const normalizedAllowedRoles = allowedRoles.map(role => 
+      RolePermissionsService.normalizeRole(role)
+    );
+
+    if (!RolePermissionsService.hasAnyRole(req.user.role, normalizedAllowedRoles)) {
       return res.status(403).json({ 
+        status: 'error',
+        code: 'FORBIDDEN',
         message: 'No tienes permisos para realizar esta acción',
-        required_roles: roles,
+        required_roles: normalizedAllowedRoles,
         your_role: req.user.role
       });
     }
@@ -102,35 +121,66 @@ const authorize = (...roles) => {
   };
 };
 
-// Middleware específicos por rol
-const requireSuperAdmin = authorize('super_admin');
-const requireAdmin = authorize('admin', 'super_admin');
-const requireUser = authorize('user', 'admin', 'super_admin');
+// Middleware para verificar permisos específicos
+const requirePermission = (permissionName) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ 
+        status: 'error',
+        code: 'AUTH_REQUIRED',
+        message: 'Usuario no autenticado' 
+      });
+    }
 
-// Función de utilidad para verificar permisos
-const hasPermission = (userRole, requiredRoles) => {
-  return requiredRoles.includes(userRole);
+    if (!RolePermissionsService.hasPermission(req.user.role, permissionName)) {
+      return res.status(403).json({ 
+        status: 'error',
+        code: 'FORBIDDEN',
+        message: `No tienes el permiso necesario: ${permissionName}`,
+        your_role: req.user.role,
+        required_permission: permissionName
+      });
+    }
+
+    next();
+  };
 };
 
+// Middleware específicos por rol
+const requireSuperAdmin = authorize(ROLES.SUPER_ADMIN);
+const requireProductOwner = authorize(ROLES.SUPER_ADMIN, ROLES.PRODUCT_OWNER);
+const requireScrumMaster = authorize(ROLES.SUPER_ADMIN, ROLES.PRODUCT_OWNER, ROLES.SCRUM_MASTER);
+const requireDeveloper = authorize(ROLES.SUPER_ADMIN, ROLES.SCRUM_MASTER, ROLES.DEVELOPERS);
+const requireUser = authorize(...Object.values(ROLES));
 
+// Función de utilidad para verificar permisos
+const hasPermission = (userRole, permissionName) => {
+  return RolePermissionsService.hasPermission(userRole, permissionName);
+};
 
 // Función para verificar si puede modificar notas de otros usuarios
 const canModifyAllNotes = (userRole) => {
-  return ['admin', 'super_admin'].includes(userRole);
+  return RolePermissionsService.hasPermission(userRole, 'canEditAllTasks');
 };
 
 // Función para verificar si puede eliminar notas
 const canDeleteNotes = (userRole) => {
-  return ['admin', 'super_admin'].includes(userRole);
+  return RolePermissionsService.hasPermission(userRole, 'canDeleteTasks');
 };
 
 module.exports = {
   authenticate,
   authorize,
+  requirePermission,
   requireSuperAdmin,
-  requireAdmin,
+  requireProductOwner,
+  requireScrumMaster,
+  requireDeveloper,
   requireUser,
   hasPermission,
   canModifyAllNotes,
-  canDeleteNotes
+  canDeleteNotes,
+  // Exportar también el servicio de roles para uso en rutas
+  RolePermissionsService,
+  ROLES
 };

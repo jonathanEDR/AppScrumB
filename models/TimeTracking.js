@@ -16,6 +16,10 @@ const timeTrackingSchema = new mongoose.Schema({
     ref: 'Sprint',
     default: null
   },
+  date: {
+    type: Date,
+    default: () => new Date()
+  },
   startTime: {
     type: Date,
     required: true
@@ -73,6 +77,15 @@ timeTrackingSchema.pre('save', function(next) {
   }
   next();
 });
+
+// Virtual para obtener horas (además de duration en minutos)
+timeTrackingSchema.virtual('hours').get(function() {
+  return Math.round((this.duration / 60) * 10) / 10; // Redondear a 1 decimal
+});
+
+// Asegurar que los virtuals se incluyan en JSON
+timeTrackingSchema.set('toJSON', { virtuals: true });
+timeTrackingSchema.set('toObject', { virtuals: true });
 
 // Método estático para obtener tiempo total por usuario y periodo
 timeTrackingSchema.statics.getTotalTimeByUser = function(userId, startDate, endDate) {

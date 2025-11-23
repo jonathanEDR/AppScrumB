@@ -13,8 +13,27 @@ const {
 const Task = require('../models/Task');
 const TimeTracking = require('../models/TimeTracking');
 const BugReport = require('../models/BugReport');
-const Commit = require('../models/Commit');
-const PullRequest = require('../models/PullRequest');
+const Comment = require('../models/Comment');
+const multer = require('multer');
+const { bugReportsStorage } = require('../config/cloudinaryConfig');
+const uploadService = require('../services/uploadService');
+const { 
+  uploadConfigs, 
+  handleMulterError 
+} = require('../middleware/imageValidation');
+const {
+  mapTaskStatusToBacklogStatus,
+  mapBacklogStatusToTaskStatus,
+  mapBacklogPriorityToTaskPriority,
+  mapBacklogTypeToTaskType
+} = require('../utils/taskMappings');
+
+// Configuración de multer con Cloudinary para bug reports
+const upload = multer({
+  storage: bugReportsStorage,
+  limits: uploadConfigs.bugReports.limits,
+  fileFilter: uploadConfigs.bugReports.fileFilter
+});
 
 // Middleware para verificar rol de developer
 const requireDeveloperRole = (req, res, next) => {
@@ -66,7 +85,7 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
 
     const tasks = await Task.find(filters)
       .populate('sprint', 'nombre estado fecha_inicio fecha_fin')
-      .populate('reporter', 'firstName lastName email')
+      .populate('reportedBy', 'firstName lastName email') // Cambiar reporter por reportedBy
       .populate('backlogItem', 'titulo')
       .sort({ updatedAt: -1 })
       .limit(limit * 1)
@@ -183,7 +202,7 @@ router.get('/time-tracking/stats', authenticate, requireDeveloperRole, async (re
 router.get('/time-tracking', authenticate, requireDeveloperRole, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { taskId, date, startDate, endDate } = req.query;
+    const { taskId, date, startDate, endDate, page = 1, limit = 20 } = req.query;
     
     const filters = {};
     if (taskId) filters.taskId = taskId;
@@ -193,11 +212,23 @@ router.get('/time-tracking', authenticate, requireDeveloperRole, async (req, res
       filters.endDate = endDate;
     }
     
-    const entries = await developersService.getTimeEntries(userId, filters);
+    // Calcular paginación
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+    
+    const entries = await developersService.getTimeEntries(userId, filters, { skip, limit: limitNum });
+    const total = await developersService.countTimeEntries(userId, filters);
     
     res.json({
       success: true,
-      data: entries || []
+      data: entries || [],
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
     });
   } catch (error) {
     console.error('Error al obtener entradas de time tracking:', error);
@@ -248,6 +279,25 @@ router.put('/time-tracking/:id', authenticate, requireDeveloperRole, validateObj
     });
   } catch (error) {
     console.error('Error al actualizar entrada de time tracking:', error);
+    
+    const errorMsg = error.message.toLowerCase();
+    
+    // Diferenciar entre error de no encontrado y otros errores
+    if (errorMsg.includes('no encontrada')) {
+      return res.status(404).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
+    // Diferenciar error de permisos
+    if (errorMsg.includes('no tienes permisos') || errorMsg.includes('timer activo')) {
+      return res.status(403).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
     res.status(400).json({ 
       success: false,
       error: error.message 
@@ -269,6 +319,25 @@ router.delete('/time-tracking/:id', authenticate, requireDeveloperRole, validate
     });
   } catch (error) {
     console.error('Error al eliminar entrada de time tracking:', error);
+    
+    const errorMsg = error.message.toLowerCase();
+    
+    // Diferenciar entre error de no encontrado y otros errores
+    if (errorMsg.includes('no encontrada')) {
+      return res.status(404).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
+    // Diferenciar error de permisos
+    if (errorMsg.includes('no tienes permisos')) {
+      return res.status(403).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
     res.status(400).json({ 
       success: false,
       error: error.message 
@@ -291,6 +360,23 @@ router.post('/timer/start', authenticate, requireDeveloperRole, validateTimerSta
     });
   } catch (error) {
     console.error('Error al iniciar timer:', error);
+    
+    // Diferenciar entre error de no encontrado y otros errores
+    if (error.message.includes('no encontrada') || error.message.includes('no tienes permisos')) {
+      return res.status(404).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
+    // Error si ya hay un timer activo
+    if (error.message.includes('timer activo')) {
+      return res.status(400).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
     res.status(400).json({ 
       success: false,
       error: error.message 
@@ -302,7 +388,7 @@ router.post('/timer/start', authenticate, requireDeveloperRole, validateTimerSta
 router.post('/timer/stop', authenticate, requireDeveloperRole, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { description } = req.body;
+    const { description = '' } = req.body || {};
     
     const timer = await developersService.stopTimer(userId, description);
     
@@ -313,6 +399,15 @@ router.post('/timer/stop', authenticate, requireDeveloperRole, async (req, res) 
     });
   } catch (error) {
     console.error('Error al detener timer:', error);
+    
+    // Diferenciar entre error de no encontrado y otros errores
+    if (error.message.includes('No hay un timer activo')) {
+      return res.status(404).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+    
     res.status(400).json({ 
       success: false,
       error: error.message 
@@ -391,82 +486,409 @@ router.post('/bug-reports', authenticate, requireDeveloperRole, validateBugRepor
   }
 });
 
-// GET /api/developers/repositories - Obtener repositorios del developer
-router.get('/repositories', authenticate, requireDeveloperRole, async (req, res) => {
+// GET /api/developers/bug-reports/:id - Obtener un bug report específico
+router.get('/bug-reports/:id', authenticate, requireDeveloperRole, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const { id } = req.params;
     
-    const repositories = await developersService.getDeveloperRepositories(userId);
-    
-    res.json({
-      success: true,
-      data: repositories
-    });
-  } catch (error) {
-    console.error('Error al obtener repositorios:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Error interno del servidor',
-      message: error.message 
-    });
-  }
-});
+    const bugReport = await BugReport.findById(id)
+      .populate('reportedBy', 'firstName lastName email role')
+      .populate('assignedTo', 'firstName lastName email role')
+      .populate('project', 'nombre')
+      .populate('sprint', 'nombre startDate endDate')
+      .lean();
 
-// GET /api/developers/commits - Obtener historial de commits
-router.get('/commits', authenticate, requireDeveloperRole, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { repository, branch, startDate, endDate } = req.query;
-    
-    const filters = {};
-    if (repository) filters.repository = repository;
-    if (branch) filters.branch = branch;
-    if (startDate && endDate) {
-      filters.startDate = startDate;
-      filters.endDate = endDate;
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
     }
-    
-    const commits = await developersService.getCommitHistory(userId, filters);
-    
+
     res.json({
       success: true,
-      data: commits
+      data: bugReport
     });
   } catch (error) {
-    console.error('Error al obtener historial de commits:', error);
-    res.status(500).json({ 
+    console.error('Error al obtener bug report:', error);
+    res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: error.message 
+      message: error.message
     });
   }
 });
 
-// GET /api/developers/pull-requests - Obtener pull requests
-router.get('/pull-requests', authenticate, requireDeveloperRole, async (req, res) => {
+// PUT /api/developers/bug-reports/:id - Actualizar bug report
+router.put('/bug-reports/:id', authenticate, requireDeveloperRole, async (req, res) => {
   try {
+    const { id } = req.params;
+    const updateData = req.body;
     const userId = req.user.id;
-    const { status, repository } = req.query;
-    
-    const filters = {};
-    if (status) filters.status = status;
-    if (repository) filters.repository = repository;
-    
-    const pullRequests = await developersService.getPullRequests(userId, filters);
-    
+
+    const bugReport = await BugReport.findById(id);
+
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    // Verificar permisos: solo el reportedBy, asignado o admin puede actualizar
+    const canUpdate = bugReport.reportedBy.toString() === userId ||
+                      (bugReport.assignedTo && bugReport.assignedTo.toString() === userId) ||
+                      ['scrum_master', 'super_admin'].includes(req.user.role);
+
+    if (!canUpdate) {
+      return res.status(403).json({
+        success: false,
+        error: 'No tienes permiso para actualizar este bug report'
+      });
+    }
+
+    // Campos que se pueden actualizar
+    const allowedFields = ['title', 'description', 'severity', 'priority', 'type', 
+                           'environment', 'stepsToReproduce', 'expectedBehavior', 
+                           'actualBehavior', 'tags'];
+
+    allowedFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        bugReport[field] = updateData[field];
+      }
+    });
+
+    await bugReport.save();
+
     res.json({
       success: true,
-      data: pullRequests
+      data: bugReport,
+      message: 'Bug report actualizado correctamente'
     });
   } catch (error) {
-    console.error('Error al obtener pull requests:', error);
-    res.status(500).json({ 
+    console.error('Error al actualizar bug report:', error);
+    res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
-      message: error.message 
+      message: error.message
     });
   }
 });
+
+// PATCH /api/developers/bug-reports/:id/status - Cambiar estado del bug
+router.patch('/bug-reports/:id/status', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, resolution, comment } = req.body;
+    const userId = req.user.id;
+
+    const bugReport = await BugReport.findById(id);
+
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    const oldStatus = bugReport.status;
+    bugReport.status = status;
+
+    // Si se marca como resuelto o cerrado, guardar resolución
+    if (['resolved', 'closed'].includes(status) && resolution) {
+      bugReport.resolution = resolution;
+      bugReport.resolvedAt = new Date();
+      bugReport.resolvedBy = userId;
+    }
+
+    await bugReport.save();
+
+    // Crear comentario del sistema sobre el cambio de estado
+    if (comment || oldStatus !== status) {
+      const statusComment = new Comment({
+        resourceType: 'BugReport',
+        resourceId: id,
+        author: userId,
+        content: comment || `Estado cambiado de ${oldStatus} a ${status}`,
+        type: 'status_change',
+        metadata: {
+          oldStatus,
+          newStatus: status,
+          resolution
+        }
+      });
+      await statusComment.save();
+    }
+
+    res.json({
+      success: true,
+      data: bugReport,
+      message: `Estado actualizado a ${status}`
+    });
+  } catch (error) {
+    console.error('Error al cambiar estado de bug:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+// PATCH /api/developers/bug-reports/:id/assign - Asignar bug a un desarrollador
+router.patch('/bug-reports/:id/assign', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { assignedTo } = req.body;
+    const userId = req.user.id;
+
+    const bugReport = await BugReport.findById(id);
+
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    // Verificar permisos: solo scrum master o admin
+    if (!['scrum_master', 'super_admin'].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        error: 'Solo Scrum Master o Admin pueden asignar bugs'
+      });
+    }
+
+    const oldAssignee = bugReport.assignedTo;
+    bugReport.assignedTo = assignedTo;
+    await bugReport.save();
+
+    // Crear comentario del sistema
+    const assignComment = new Comment({
+      resourceType: 'BugReport',
+      resourceId: id,
+      author: userId,
+      content: `Bug asignado a nuevo desarrollador`,
+      type: 'system',
+      metadata: {
+        action: 'assign',
+        oldAssignee,
+        newAssignee: assignedTo
+      }
+    });
+    await assignComment.save();
+
+    res.json({
+      success: true,
+      data: bugReport,
+      message: 'Bug asignado correctamente'
+    });
+  } catch (error) {
+    console.error('Error al asignar bug:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+// POST /api/developers/bug-reports/:id/attachments - Subir archivos adjuntos
+router.post('/bug-reports/:id/attachments', 
+  authenticate, 
+  requireDeveloperRole, 
+  upload.array('attachments', 5), // Máximo 5 archivos
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const bugReport = await BugReport.findById(id);
+
+      if (!bugReport) {
+        // Eliminar archivos subidos si el bug no existe
+        req.files?.forEach(file => {
+          fs.unlinkSync(file.path);
+        });
+
+        return res.status(404).json({
+          success: false,
+          error: 'Bug report no encontrado'
+        });
+      }
+
+      // Agregar información de los archivos subidos
+      // Procesar archivos subidos a Cloudinary
+      const attachments = req.files.map(file => ({
+        filename: file.filename,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+        url: file.path, // URL de Cloudinary
+        publicId: file.filename, // Public ID de Cloudinary
+        cloudinaryData: {
+          publicId: file.filename,
+          url: file.path,
+          secureUrl: file.path,
+          format: file.originalname.split('.').pop(),
+          resourceType: file.mimetype.startsWith('image/') ? 'image' : 'raw'
+        },
+        uploadedAt: new Date()
+      }));
+
+      bugReport.attachments.push(...attachments);
+      await bugReport.save();
+
+      res.json({
+        success: true,
+        data: {
+          bugReport,
+          uploadedFiles: attachments.length
+        },
+        message: `${attachments.length} archivo(s) subido(s) correctamente`
+      });
+    } catch (error) {
+      console.error('Error al subir archivos:', error);
+      
+      // Limpiar archivos de Cloudinary si hay error
+      if (req.files && req.files.length > 0) {
+        const publicIds = req.files.map(f => f.filename);
+        uploadService.deleteMultipleFiles(publicIds, 'raw').catch(err => 
+          console.error('Error limpiando archivos de Cloudinary:', err)
+        );
+      }
+
+      res.status(500).json({
+        success: false,
+        error: 'Error al subir archivos',
+        message: error.message
+      });
+    }
+});
+
+// DELETE /api/developers/bug-reports/:id - Eliminar bug report (soft delete)
+router.delete('/bug-reports/:id', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const bugReport = await BugReport.findById(id);
+
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    // Solo el reporter o admin puede eliminar
+    const canDelete = bugReport.reportedBy.toString() === userId ||
+                      ['scrum_master', 'super_admin'].includes(req.user.role);
+
+    if (!canDelete) {
+      return res.status(403).json({
+        success: false,
+        error: 'No tienes permiso para eliminar este bug report'
+      });
+    }
+
+    // Soft delete
+    bugReport.status = 'closed';
+    bugReport.resolution = 'wont_fix';
+    bugReport.resolvedAt = new Date();
+    bugReport.resolvedBy = userId;
+    await bugReport.save();
+
+    res.json({
+      success: true,
+      message: 'Bug report eliminado correctamente'
+    });
+  } catch (error) {
+    console.error('Error al eliminar bug report:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+// GET /api/developers/bug-reports/:id/comments - Obtener comentarios de un bug
+router.get('/bug-reports/:id/comments', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    const result = await Comment.getCommentThread('BugReport', id, {
+      page: parseInt(page),
+      limit: parseInt(limit)
+    });
+
+    res.json({
+      success: true,
+      data: result.comments,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    console.error('Error al obtener comentarios:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+// POST /api/developers/bug-reports/:id/comments - Agregar comentario
+router.post('/bug-reports/:id/comments', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { content, parentComment } = req.body;
+    const userId = req.user.id;
+
+    if (!content || content.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'El contenido del comentario es requerido'
+      });
+    }
+
+    // Verificar que el bug existe
+    const bugReport = await BugReport.findById(id);
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    const comment = new Comment({
+      resourceType: 'BugReport',
+      resourceId: id,
+      author: userId,
+      content: content.trim(),
+      type: 'comment',
+      parentComment: parentComment || null
+    });
+
+    await comment.save();
+    await comment.populate('author', 'name email avatar role');
+
+    res.status(201).json({
+      success: true,
+      data: comment,
+      message: 'Comentario agregado correctamente'
+    });
+  } catch (error) {
+    console.error('Error al crear comentario:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+
 
 // POST /api/developers/backlog/:itemId/take - Auto-asignarse una tarea del backlog
 router.post('/backlog/:itemId/take', authenticate, requireDeveloperRole, async (req, res) => {
@@ -713,38 +1135,5 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
     });
   }
 });
-
-// Función helper para mapear estados de Task a BacklogItem
-function mapTaskStatusToBacklogStatus(taskStatus) {
-  const statusMap = {
-    'todo': 'pendiente',
-    'in_progress': 'en_progreso',
-    'code_review': 'en_revision',
-    'testing': 'en_revision',
-    'done': 'completado'
-  };
-  return statusMap[taskStatus] || 'pendiente';
-}
-
-// Funciones helper para mapear estados y prioridades
-function mapBacklogStatusToTaskStatus(backlogStatus) {
-  const statusMap = {
-    'pendiente': 'todo',
-    'en_progreso': 'in_progress',
-    'en_revision': 'code_review',
-    'completado': 'done'
-  };
-  return statusMap[backlogStatus] || 'todo';
-}
-
-function mapBacklogPriorityToTaskPriority(backlogPriority) {
-  const priorityMap = {
-    'muy_alta': 'critical',
-    'alta': 'high',
-    'media': 'medium',
-    'baja': 'low'
-  };
-  return priorityMap[backlogPriority] || 'medium';
-}
 
 module.exports = router;

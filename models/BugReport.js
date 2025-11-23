@@ -104,9 +104,29 @@ const bugReportSchema = new mongoose.Schema({
       type: Number,
       required: true
     },
+    // Mantener path para compatibilidad pero ahora es URL de Cloudinary
     path: {
       type: String,
       required: true
+    },
+    // Nuevos campos para Cloudinary
+    url: {
+      type: String,
+      default: function() { return this.path; } // URL completa de Cloudinary
+    },
+    publicId: {
+      type: String // Public ID de Cloudinary para operaciones (delete, transform, etc)
+    },
+    cloudinaryData: {
+      publicId: String,
+      url: String,
+      secureUrl: String,
+      format: String,
+      resourceType: {
+        type: String,
+        enum: ['image', 'raw', 'video'],
+        default: 'raw'
+      }
     },
     uploadedAt: {
       type: Date,
