@@ -57,6 +57,7 @@ const diagnosticsRoutes = require('./routes/diagnostics');  // Rutas de diagnós
 const systemConfigRoutes = require('./routes/systemConfig');  // Rutas de configuración del sistema
 const cloudinaryRoutes = require('./routes/cloudinary');  // Rutas de gestión de Cloudinary
 const profileRoutes = require('./routes/profile');  // Rutas de perfil/CV
+const scrumMasterRoutes = require('./routes/scrumMaster');  // Rutas de Scrum Master (Dashboard consolidado)
 
 const app = express();
 const port = process.env.PORT || 5000;  // Usar el puerto de la variable de entorno o el 5000 por defecto
@@ -216,6 +217,7 @@ app.use('/api/admin/diagnostics', diagnosticsRoutes);  // Rutas de diagnóstico 
 app.use('/api/system-config', systemConfigRoutes);  // Rutas de configuración del sistema
 app.use('/api/cloudinary', cloudinaryRoutes);  // Rutas de gestión de Cloudinary
 app.use('/api/profile', profileRoutes);  // Rutas de perfil/CV
+app.use('/api/scrum-master', scrumMasterRoutes);  // ✅ NUEVO: Dashboard consolidado Scrum Master
 
 // NOTA: Ya no servimos archivos estáticos locales, todo está en Cloudinary
 

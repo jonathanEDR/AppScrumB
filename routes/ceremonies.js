@@ -21,6 +21,7 @@ router.get('/', authenticate, async (req, res) => {
     const ceremonies = await Ceremony.find(filters)
       .populate('participants.user', 'firstName lastName email')
       .populate('createdBy', 'firstName lastName email')
+      .populate('facilitator', 'firstName lastName email')
       .sort({ date: -1, startTime: -1 });
     
     res.json({
@@ -39,7 +40,8 @@ router.get('/:id', authenticate, async (req, res) => {
     const { id } = req.params;
     const ceremony = await Ceremony.findById(id)
       .populate('participants.user', 'firstName lastName email')
-      .populate('createdBy', 'firstName lastName email');
+      .populate('createdBy', 'firstName lastName email')
+      .populate('facilitator', 'firstName lastName email');
     
     if (!ceremony) {
       return res.status(404).json({ error: 'Ceremonia no encontrada' });
@@ -91,7 +93,8 @@ router.post('/', authenticate, async (req, res) => {
       date: new Date(date),
       startTime,
       duration: duration || 60,
-      createdBy: req.user.id
+      createdBy: req.user.id,
+      facilitator: req.user.id  // El creador es el facilitador por defecto
     };
     
     // Agregar participantes si se proporcionaron
@@ -113,6 +116,7 @@ router.post('/', authenticate, async (req, res) => {
     // Populate the response
     await newCeremony.populate('participants.user', 'firstName lastName email');
     await newCeremony.populate('createdBy', 'firstName lastName email');
+    await newCeremony.populate('facilitator', 'firstName lastName email');
     
     res.status(201).json({
       message: 'Ceremonia creada exitosamente',
@@ -166,6 +170,7 @@ router.put('/:id', authenticate, async (req, res) => {
     // Populate the response
     await ceremony.populate('participants.user', 'firstName lastName email');
     await ceremony.populate('createdBy', 'firstName lastName email');
+    await ceremony.populate('facilitator', 'firstName lastName email');
     
     res.json({
       message: 'Ceremonia actualizada exitosamente',
@@ -207,6 +212,7 @@ router.put('/:id/status', authenticate, async (req, res) => {
     // Populate the response
     await ceremony.populate('participants.user', 'firstName lastName email');
     await ceremony.populate('createdBy', 'firstName lastName email');
+    await ceremony.populate('facilitator', 'firstName lastName email');
     
     res.json({
       message: 'Estado de la ceremonia actualizado exitosamente',
@@ -257,6 +263,7 @@ router.get('/upcoming/list', authenticate, async (req, res) => {
     })
       .populate('participants.user', 'firstName lastName email')
       .populate('createdBy', 'firstName lastName email')
+      .populate('facilitator', 'firstName lastName email')
       .sort({ date: 1, startTime: 1 })
       .limit(5);
     
