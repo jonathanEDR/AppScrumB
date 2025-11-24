@@ -32,7 +32,8 @@ mongoose.set('strictQuery', false);
 
 // Importar logger y configuraciones de optimización
 const logger = require('./config/logger');
-const { generalLimiter } = require('./config/rateLimiter');
+const smartRateLimiter = require('./middleware/smartRateLimiter'); // ✅ NUEVO: Rate limiter inteligente
+const cacheControl = require('./middleware/cacheControl'); // ✅ NUEVO: Cache-Control headers
 const { addDatabaseIndexes } = require('./config/databaseOptimization');
 const { verifyCloudinaryConfig } = require('./config/cloudinaryConfig');
 
@@ -137,8 +138,11 @@ app.use(compression({
   level: 6 // Balance entre velocidad y compresión
 }));
 
-// Rate limiting general (aplicado a todas las rutas)
-app.use('/api/', generalLimiter);
+// ✅ OPTIMIZADO: Rate limiting inteligente (GET más permisivo, POST/PUT/DELETE más estricto)
+app.use('/api/', smartRateLimiter);
+
+// ✅ OPTIMIZADO: Cache-Control headers para optimizar cacheo en navegador/CDN
+app.use('/api/', cacheControl);
 
 // Logger middleware para requests HTTP
 app.use(logger.expressMiddleware);

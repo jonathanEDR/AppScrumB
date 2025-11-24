@@ -10,7 +10,7 @@ const TeamMember = require('../models/TeamMember');
 // Obtener todos los usuarios (para listas desplegables)
 router.get('/', authenticate, async (req, res) => {
   try {
-    const users = await User.find({}, 'clerk_id nombre_negocio email role')
+    const users = await User.find({}, 'clerk_id nombre_negocio email role is_active')
       .sort({ nombre_negocio: 1 });
     
     res.json({

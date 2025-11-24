@@ -7,7 +7,7 @@ const { authenticate } = require('../middleware/authenticate');
 const mongoose = require('mongoose');
 
 // GET /api/sprints - Obtener todos los sprints
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   try {
     console.log('=== Getting sprints ===');
     console.log('Query params:', req.query);
@@ -16,7 +16,15 @@ router.get('/', async (req, res) => {
     
     const filtros = {};
     if (producto) filtros.producto = producto;
-    if (estado) filtros.estado = estado;
+    if (estado) {
+      // Manejar múltiples estados separados por coma
+      const estados = estado.split(',').map(e => e.trim());
+      if (estados.length > 1) {
+        filtros.estado = { $in: estados };
+      } else {
+        filtros.estado = estado;
+      }
+    }
 
     console.log('Filters applied:', filtros);
 
@@ -647,6 +655,405 @@ router.get('/independent', async (req, res) => {
   } catch (error) {
     console.error('Error al obtener sprints independientes:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// POST /api/sprints/:sprintId/assign-multiple - Asignar múltiples historias a sprint
+router.post('/:sprintId/assign-multiple', authenticate, async (req, res) => {
+  try {
+    console.log('=== Assigning multiple stories to sprint ===');
+    const { sprintId } = req.params;
+    const { storyIds } = req.body;
+
+    // Validar que se proporcionaron IDs
+    if (!storyIds || !Array.isArray(storyIds) || storyIds.length === 0) {
+      return res.status(400).json({ error: 'Se requiere un array de IDs de historias' });
+    }
+
+    // Verificar que el sprint existe
+    const sprint = await Sprint.findById(sprintId);
+    if (!sprint) {
+      return res.status(404).json({ error: 'Sprint no encontrado' });
+    }
+
+    // Verificar que el sprint está en estado válido
+    if (!['planificado', 'activo'].includes(sprint.estado)) {
+      return res.status(400).json({ 
+        error: 'Solo se pueden asignar historias a sprints planificados o activos' 
+      });
+    }
+
+    // Obtener las historias a asignar
+    const stories = await BacklogItem.find({ _id: { $in: storyIds } });
+    
+    if (stories.length !== storyIds.length) {
+      return res.status(404).json({ 
+        error: 'Algunas historias no fueron encontradas' 
+      });
+    }
+
+    // Verificar que ninguna historia esté asignada a otro sprint
+    const storiesInOtherSprints = stories.filter(
+      story => story.sprint && story.sprint.toString() !== sprintId
+    );
+    
+    if (storiesInOtherSprints.length > 0) {
+      return res.status(400).json({ 
+        error: `${storiesInOtherSprints.length} historia(s) ya están asignadas a otro sprint`,
+        conflictingStories: storiesInOtherSprints.map(s => ({
+          id: s._id,
+          titulo: s.titulo,
+          sprint: s.sprint
+        }))
+      });
+    }
+
+    // Calcular puntos totales
+    const newPoints = stories.reduce((sum, story) => sum + (story.puntos_historia || 0), 0);
+    
+    // Obtener historias ya asignadas al sprint
+    const existingStories = await BacklogItem.find({ sprint: sprintId });
+    const currentPoints = existingStories.reduce((sum, story) => sum + (story.puntos_historia || 0), 0);
+    const totalPoints = currentPoints + newPoints;
+
+    // Validar capacidad si está definida
+    let capacityWarning = null;
+    if (sprint.capacidad_equipo > 0) {
+      // Convertir capacidad de horas a puntos (asumiendo 1 punto = 4 horas)
+      const capacityInPoints = sprint.capacidad_equipo / 4;
+      const percentageUsed = (totalPoints / capacityInPoints) * 100;
+
+      if (percentageUsed > 100) {
+        capacityWarning = {
+          severity: 'error',
+          message: `Sobrecarga: ${totalPoints.toFixed(1)} pts de ${capacityInPoints.toFixed(1)} pts disponibles (${percentageUsed.toFixed(0)}%)`,
+          percentageUsed: percentageUsed.toFixed(1),
+          exceeded: true
+        };
+      } else if (percentageUsed > 90) {
+        capacityWarning = {
+          severity: 'warning',
+          message: `Cerca del límite: ${percentageUsed.toFixed(0)}% de capacidad utilizada`,
+          percentageUsed: percentageUsed.toFixed(1),
+          exceeded: false
+        };
+      }
+    }
+
+    // Asignar todas las historias al sprint
+    const updateResults = await BacklogItem.updateMany(
+      { _id: { $in: storyIds } },
+      { 
+        $set: { 
+          sprint: sprintId,
+          estado: 'pendiente' // Asegurar que estén en estado pendiente
+        }
+      }
+    );
+
+    console.log(`Successfully assigned ${updateResults.modifiedCount} stories to sprint ${sprintId}`);
+
+    // Obtener las historias actualizadas
+    const updatedStories = await BacklogItem.find({ _id: { $in: storyIds } })
+      .populate('producto', 'nombre')
+      .populate('asignado_a', 'firstName lastName email');
+
+    res.json({
+      message: `${updateResults.modifiedCount} historia(s) asignadas exitosamente`,
+      assigned: updateResults.modifiedCount,
+      stories: updatedStories,
+      capacity: {
+        currentPoints,
+        newPoints,
+        totalPoints,
+        capacityInPoints: sprint.capacidad_equipo > 0 ? sprint.capacidad_equipo / 4 : null,
+        percentageUsed: sprint.capacidad_equipo > 0 ? ((totalPoints / (sprint.capacidad_equipo / 4)) * 100).toFixed(1) : null,
+        warning: capacityWarning
+      }
+    });
+
+  } catch (error) {
+    console.error('Error al asignar historias:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// POST /api/sprints/:sprintId/validate-capacity - Validar capacidad antes de asignar
+router.post('/:sprintId/validate-capacity', authenticate, async (req, res) => {
+  try {
+    const { sprintId } = req.params;
+    const { storyIds } = req.body;
+
+    // Validar entrada
+    if (!storyIds || !Array.isArray(storyIds) || storyIds.length === 0) {
+      return res.status(400).json({ error: 'Se requiere un array de IDs de historias' });
+    }
+
+    // Obtener sprint
+    const sprint = await Sprint.findById(sprintId);
+    if (!sprint) {
+      return res.status(404).json({ error: 'Sprint no encontrado' });
+    }
+
+    // Obtener las historias a validar
+    const newStories = await BacklogItem.find({ _id: { $in: storyIds } });
+    const newPoints = newStories.reduce((sum, story) => sum + (story.puntos_historia || 0), 0);
+
+    // Obtener historias ya asignadas
+    const existingStories = await BacklogItem.find({ sprint: sprintId });
+    const currentPoints = existingStories.reduce((sum, story) => sum + (story.puntos_historia || 0), 0);
+    const totalPoints = currentPoints + newPoints;
+
+    // Calcular capacidad
+    let validation = {
+      isValid: true,
+      currentPoints,
+      newPoints,
+      totalPoints,
+      capacity: sprint.capacidad_equipo,
+      capacityInPoints: sprint.capacidad_equipo > 0 ? sprint.capacidad_equipo / 4 : null,
+      percentageUsed: null,
+      recommendation: 'optimal',
+      message: null,
+      severity: 'success'
+    };
+
+    if (sprint.capacidad_equipo > 0) {
+      const capacityInPoints = sprint.capacidad_equipo / 4;
+      const percentageUsed = (totalPoints / capacityInPoints) * 100;
+      
+      validation.percentageUsed = percentageUsed.toFixed(1);
+
+      if (percentageUsed > 100) {
+        validation.isValid = false;
+        validation.recommendation = 'overloaded';
+        validation.severity = 'error';
+        validation.message = `⚠️ Sobrecarga: ${totalPoints.toFixed(1)} pts excede capacidad de ${capacityInPoints.toFixed(1)} pts (${percentageUsed.toFixed(0)}%)`;
+        validation.exceeds = (totalPoints - capacityInPoints).toFixed(1);
+      } else if (percentageUsed > 90) {
+        validation.isValid = true;
+        validation.recommendation = 'near_limit';
+        validation.severity = 'warning';
+        validation.message = `⚠️ Cerca del límite: ${percentageUsed.toFixed(0)}% de capacidad`;
+      } else if (percentageUsed < 70) {
+        validation.isValid = true;
+        validation.recommendation = 'underutilized';
+        validation.severity = 'info';
+        validation.message = `ℹ️ Capacidad subutilizada: ${percentageUsed.toFixed(0)}%. Considera agregar más historias`;
+      } else {
+        validation.isValid = true;
+        validation.recommendation = 'optimal';
+        validation.severity = 'success';
+        validation.message = `✅ Capacidad óptima: ${percentageUsed.toFixed(0)}%`;
+      }
+    } else {
+      validation.message = 'ℹ️ Sprint sin capacidad definida - no se puede validar';
+      validation.severity = 'info';
+    }
+
+    // Detalles de las historias
+    validation.stories = {
+      existing: existingStories.length,
+      new: newStories.length,
+      total: existingStories.length + newStories.length,
+      newStoriesDetails: newStories.map(s => ({
+        id: s._id,
+        titulo: s.titulo,
+        puntos: s.puntos_historia || 0,
+        prioridad: s.prioridad
+      }))
+    };
+
+    res.json(validation);
+
+  } catch (error) {
+    console.error('Error al validar capacidad:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// ============================================
+// ENDPOINT: Obtener datos de Burndown Chart automáticamente
+// ============================================
+router.get('/:id/burndown-data', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log(`=== Getting burndown data for sprint ${id} ===`);
+
+    // Validar ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID de sprint inválido'
+      });
+    }
+
+    // Obtener sprint con historias populadas
+    const sprint = await Sprint.findById(id).populate('producto');
+    
+    if (!sprint) {
+      return res.status(404).json({
+        success: false,
+        error: 'Sprint no encontrado'
+      });
+    }
+
+    // Obtener todas las historias asignadas a este sprint
+    const BacklogItem = require('../models/BacklogItem');
+    const historias = await BacklogItem.find({ sprint: id }).select('puntos_historia estado fecha_completado createdAt updatedAt');
+
+    console.log(`Found ${historias.length} stories in sprint`);
+
+    // Calcular total de story points
+    const totalPoints = historias.reduce((sum, h) => sum + (h.puntos_historia || 0), 0);
+    
+    if (totalPoints === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        totalPoints: 0,
+        prediction: {
+          willComplete: true,
+          daysAheadBehind: 0,
+          estimatedCompletionDate: sprint.fecha_fin,
+          message: 'No hay story points asignados al sprint'
+        }
+      });
+    }
+
+    // Calcular duración del sprint en días
+    const startDate = new Date(sprint.fecha_inicio);
+    const endDate = new Date(sprint.fecha_fin);
+    const today = new Date();
+    
+    const totalDays = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+    const daysElapsed = Math.ceil((today - startDate) / (1000 * 60 * 60 * 24));
+    const daysRemaining = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+
+    console.log(`Sprint duration: ${totalDays} days, Elapsed: ${daysElapsed}, Remaining: ${daysRemaining}`);
+
+    // Generar datos del burndown
+    const burndownData = [];
+    
+    for (let day = 0; day <= totalDays; day++) {
+      const currentDate = new Date(startDate);
+      currentDate.setDate(currentDate.getDate() + day);
+      
+      // Línea ideal: decremento lineal
+      const idealRemaining = totalPoints - (totalPoints / totalDays) * day;
+      
+      // Línea actual: calcular puntos completados hasta esta fecha
+      const completedPoints = historias
+        .filter(h => {
+          if (h.estado === 'completado' || h.estado === 'cerrado') {
+            const completedDate = h.fecha_completado ? new Date(h.fecha_completado) : new Date(h.updatedAt);
+            return completedDate <= currentDate;
+          }
+          return false;
+        })
+        .reduce((sum, h) => sum + (h.puntos_historia || 0), 0);
+      
+      const actualRemaining = totalPoints - completedPoints;
+      
+      burndownData.push({
+        day: day,
+        date: currentDate.toISOString().split('T')[0],
+        ideal: Math.max(0, Math.round(idealRemaining * 10) / 10),
+        actual: Math.max(0, actualRemaining),
+        completed: completedPoints
+      });
+    }
+
+    console.log(`Generated ${burndownData.length} burndown data points`);
+
+    // Calcular predicción
+    const currentData = burndownData.find(d => d.day === daysElapsed) || burndownData[burndownData.length - 1];
+    const pointsRemaining = currentData ? currentData.actual : totalPoints;
+    const pointsCompleted = totalPoints - pointsRemaining;
+
+    // Velocidad actual (puntos por día)
+    const currentVelocity = daysElapsed > 0 ? pointsCompleted / daysElapsed : 0;
+    
+    // Días necesarios para completar el trabajo restante
+    const daysNeededToComplete = currentVelocity > 0 ? Math.ceil(pointsRemaining / currentVelocity) : Infinity;
+    
+    // Fecha estimada de completación
+    const estimatedCompletionDate = new Date(today);
+    estimatedCompletionDate.setDate(estimatedCompletionDate.getDate() + daysNeededToComplete);
+    
+    // Comparar con fecha fin del sprint
+    const willCompleteOnTime = estimatedCompletionDate <= endDate && daysNeededToComplete !== Infinity;
+    const daysAheadBehind = willCompleteOnTime 
+      ? Math.ceil((endDate - estimatedCompletionDate) / (1000 * 60 * 60 * 24))
+      : Math.ceil((estimatedCompletionDate - endDate) / (1000 * 60 * 60 * 24));
+
+    // Agregar línea de predicción si el sprint está en progreso
+    if (sprint.estado === 'activo' && daysRemaining > 0 && currentVelocity > 0) {
+      for (let day = daysElapsed + 1; day <= totalDays; day++) {
+        const projectedRemaining = pointsRemaining - (currentVelocity * (day - daysElapsed));
+        burndownData[day].prediction = Math.max(0, Math.round(projectedRemaining * 10) / 10);
+      }
+    }
+
+    // Calcular tendencia
+    let trend = 'on-track';
+    const percentComplete = (pointsCompleted / totalPoints) * 100;
+    const percentTimeElapsed = (daysElapsed / totalDays) * 100;
+    
+    if (percentComplete >= percentTimeElapsed + 10) {
+      trend = 'ahead';
+    } else if (percentComplete <= percentTimeElapsed - 10) {
+      trend = 'behind';
+    }
+
+    // Preparar mensaje de predicción
+    let predictionMessage = '';
+    if (sprint.estado === 'completado') {
+      predictionMessage = 'Sprint completado';
+    } else if (sprint.estado === 'planificado') {
+      predictionMessage = 'Sprint no iniciado';
+    } else if (willCompleteOnTime) {
+      predictionMessage = `Se completará ${daysAheadBehind} día(s) antes de la fecha límite`;
+    } else if (daysNeededToComplete === Infinity) {
+      predictionMessage = 'Sin progreso suficiente para estimar completación';
+    } else {
+      predictionMessage = `Se completará ${daysAheadBehind} día(s) después de la fecha límite`;
+    }
+
+    res.json({
+      success: true,
+      data: burndownData,
+      totalPoints,
+      pointsCompleted,
+      pointsRemaining,
+      totalDays,
+      daysElapsed,
+      daysRemaining,
+      currentVelocity: Math.round(currentVelocity * 10) / 10,
+      percentComplete: Math.round(percentComplete),
+      trend,
+      prediction: {
+        willComplete: willCompleteOnTime,
+        daysAheadBehind,
+        estimatedCompletionDate: estimatedCompletionDate.toISOString().split('T')[0],
+        message: predictionMessage
+      },
+      sprint: {
+        nombre: sprint.nombre,
+        estado: sprint.estado,
+        fecha_inicio: sprint.fecha_inicio,
+        fecha_fin: sprint.fecha_fin
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting burndown data:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error al obtener datos de burndown',
+      details: error.message
+    });
   }
 });
 

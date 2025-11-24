@@ -1,17 +1,94 @@
 const rateLimit = require('express-rate-limit');
 const logger = require('./logger');
 
-// Rate limiter general para toda la API
-const generalLimiter = rateLimit({
+// Detectar entorno de desarrollo
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
+// ✅ OPTIMIZACIÓN: Rate limiter diferenciado para operaciones GET (lectura)
+// GET puede tener más requests porque son operaciones de solo lectura
+const readLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 100, // 100 requests por ventana
+  max: isDevelopment ? 2000 : 200, // 2000 en desarrollo, 200 en producción
+  message: {
+    success: false,
+    error: 'Demasiadas solicitudes de lectura, por favor intenta de nuevo más tarde.',
+    retryAfter: '15 minutos'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    if (isDevelopment) {
+      return true; // Skip en desarrollo
+    }
+    return false;
+  },
+  handler: (req, res) => {
+    logger.warn('Read rate limit exceeded', {
+      context: 'ReadRateLimit',
+      ip: req.ip,
+      url: req.originalUrl,
+      method: req.method
+    });
+    
+    res.status(429).json({
+      success: false,
+      error: 'Demasiadas solicitudes de lectura desde esta IP',
+      retryAfter: '15 minutos'
+    });
+  }
+});
+
+// ✅ OPTIMIZACIÓN: Rate limiter diferenciado para operaciones POST/PUT/DELETE (escritura)
+// Escritura más restrictiva para prevenir spam y abuso
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: isDevelopment ? 500 : 50, // 500 en desarrollo, 50 en producción
+  message: {
+    success: false,
+    error: 'Demasiadas operaciones de escritura, por favor intenta de nuevo más tarde.',
+    retryAfter: '15 minutos'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    if (isDevelopment) {
+      return true; // Skip en desarrollo
+    }
+    return false;
+  },
+  handler: (req, res) => {
+    logger.warn('Write rate limit exceeded', {
+      context: 'WriteRateLimit',
+      ip: req.ip,
+      url: req.originalUrl,
+      method: req.method
+    });
+    
+    res.status(429).json({
+      success: false,
+      error: 'Demasiadas operaciones de escritura desde esta IP',
+      retryAfter: '15 minutos'
+    });
+  }
+});
+
+// Rate limiter general (fallback para mantener compatibilidad)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isDevelopment ? 1000 : 100,
   message: {
     success: false,
     error: 'Demasiadas solicitudes desde esta IP, por favor intenta de nuevo más tarde.',
     retryAfter: '15 minutos'
   },
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    if (isDevelopment) {
+      return true;
+    }
+    return false;
+  },
   handler: (req, res) => {
     logger.warn('Rate limit exceeded', {
       context: 'RateLimit',
@@ -31,13 +108,20 @@ const generalLimiter = rateLimit({
 // Rate limiter estricto para endpoints de creación
 const createLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hora
-  max: 50, // 50 creaciones por hora
+  max: isDevelopment ? 500 : 50, // 500 creaciones en desarrollo, 50 en producción
   message: {
     success: false,
     error: 'Límite de creación excedido, intenta de nuevo en 1 hora.',
     retryAfter: '1 hora'
   },
   skipSuccessfulRequests: false,
+  skip: (req) => {
+    // En desarrollo, solo loguear pero no bloquear
+    if (isDevelopment) {
+      return true;
+    }
+    return false;
+  },
   handler: (req, res) => {
     logger.warn('Create rate limit exceeded', {
       context: 'RateLimit',
@@ -129,6 +213,8 @@ const searchLimiter = rateLimit({
 
 module.exports = {
   generalLimiter,
+  readLimiter,      // ✅ NUEVO: Para operaciones GET
+  writeLimiter,     // ✅ NUEVO: Para operaciones POST/PUT/DELETE
   createLimiter,
   uploadLimiter,
   authLimiter,
