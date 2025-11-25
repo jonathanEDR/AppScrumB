@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/authenticate');
 const developersService = require('../services/developersService');
+const { cacheMiddleware, invalidatePattern, CACHE_DURATIONS } = require('../config/cache');
+const SprintHelpers = require('../utils/sprintHelpers');
+const BacklogItemHelpers = require('../utils/backlogItemHelpers');
 const {
   validateTimeEntry,
   validateTaskStatusUpdate,
@@ -46,7 +49,7 @@ const requireDeveloperRole = (req, res, next) => {
 };
 
 // GET /api/developers/dashboard - Dashboard del developer
-router.get('/dashboard', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/dashboard', authenticate, requireDeveloperRole, cacheMiddleware(CACHE_DURATIONS.SHORT), async (req, res) => {
   try {
     const userId = req.user.id;
     const dashboardData = await developersService.getDashboardMetrics(userId);
@@ -66,7 +69,7 @@ router.get('/dashboard', authenticate, requireDeveloperRole, async (req, res) =>
 });
 
 // GET /api/developers/tasks - Obtener tareas del developer
-router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/tasks', authenticate, requireDeveloperRole, cacheMiddleware(30), async (req, res) => {
   try {
     const userId = req.user.id;
     const { status, priority, sprint, search, page = 1, limit = 20 } = req.query;
@@ -116,45 +119,8 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
 
     console.log('📋 BacklogItems asignados encontrados:', backlogItems.length);
 
-    // === 3. CONVERTIR BACKLOG ITEMS A FORMATO TASK ===
-    const convertedBacklogItems = backlogItems.map(item => {
-      // Mapear estados
-      const statusMap = {
-        'pendiente': 'todo',
-        'en_progreso': 'in_progress', 
-        'en_revision': 'code_review',
-        'revision': 'code_review',
-        'pruebas': 'testing',
-        'completado': 'done'
-      };
-
-      // Mapear prioridades
-      const priorityMap = {
-        'alta': 'high',
-        'media': 'medium',
-        'baja': 'low'
-      };
-
-      return {
-        _id: item._id,
-        title: item.titulo,
-        description: item.descripcion,
-        status: statusMap[item.estado] || 'todo',
-        priority: priorityMap[item.prioridad] || 'medium',
-        storyPoints: item.story_points || 0,
-        assignee: item.asignado_a,
-        sprint: item.sprint,
-        type: 'backlog-item', // Marcar el origen
-        backlogItem: {
-          _id: item._id,
-          titulo: item.titulo
-        },
-        historia_padre: item.historia_padre,
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-        spentHours: 0 // Por ahora sin time tracking para BacklogItems
-      };
-    });
+    // === 3. CONVERTIR BACKLOG ITEMS A FORMATO TASK (usando helper) ===
+    const convertedBacklogItems = BacklogItemHelpers.convertMultipleToTaskFormat(backlogItems);
 
     console.log('🔄 BacklogItems convertidos:', convertedBacklogItems.length);
 
@@ -179,31 +145,45 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
     const endIndex = startIndex + parseInt(limit);
     const paginatedTasks = allTasks.slice(startIndex, endIndex);
 
-    // === 6. AGREGAR TIME TRACKING PARA TASKS REGULARES ===
-    const tasksWithTime = await Promise.all(paginatedTasks.map(async (task) => {
-      if (task.type === 'task') {
-        const timeTracking = await TimeTracking.aggregate([
-          {
-            $match: {
-              task: task._id,
-              endTime: { $ne: null }
-            }
-          },
-          {
-            $group: {
-              _id: null,
-              totalMinutes: { $sum: '$duration' }
-            }
-          }
-        ]);
+    // === 6. AGREGAR TIME TRACKING PARA TASKS REGULARES (OPTIMIZADO - Sin N+1) ===
+    // Obtener todos los IDs de tasks regulares
+    const regularTaskIds = paginatedTasks
+      .filter(task => task.type === 'task')
+      .map(task => task._id);
 
-        return {
-          ...task,
-          spentHours: Math.round((timeTracking[0]?.totalMinutes || 0) / 60 * 100) / 100
-        };
-      }
-      
-      return task; // BacklogItems ya tienen spentHours: 0
+    // Traer time tracking de todas las tasks de una vez
+    let timeTrackingMap = new Map();
+    if (regularTaskIds.length > 0) {
+      const timeTrackingData = await TimeTracking.aggregate([
+        {
+          $match: {
+            task: { $in: regularTaskIds },
+            endTime: { $ne: null }
+          }
+        },
+        {
+          $group: {
+            _id: '$task',
+            totalSeconds: { $sum: '$duration' }
+          }
+        }
+      ]);
+
+      // Convertir a Map para búsqueda O(1)
+      timeTrackingMap = new Map(
+        timeTrackingData.map(item => [
+          item._id.toString(),
+          Math.round((item.totalSeconds / 60) * 100) / 100 // segundos a minutos
+        ])
+      );
+    }
+
+    // Agregar time tracking a las tareas (operación en memoria, sin queries adicionales)
+    const tasksWithTime = paginatedTasks.map(task => ({
+      ...task,
+      spentHours: task.type === 'task' 
+        ? (timeTrackingMap.get(task._id.toString()) || 0)
+        : 0
     }));
 
     res.json({
@@ -230,7 +210,7 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
 });
 
 // GET /api/developers/sprints - Obtener lista de sprints disponibles
-router.get('/sprints', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/sprints', authenticate, requireDeveloperRole, cacheMiddleware(CACHE_DURATIONS.MEDIUM), async (req, res) => {
   try {
     const sprints = await developersService.getAvailableSprints();
     
@@ -249,7 +229,7 @@ router.get('/sprints', authenticate, requireDeveloperRole, async (req, res) => {
 });
 
 // GET /api/developers/sprint-board - Obtener datos del sprint board
-router.get('/sprint-board', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/sprint-board', authenticate, requireDeveloperRole, cacheMiddleware(CACHE_DURATIONS.SHORT), async (req, res) => {
   try {
     const userId = req.user.id;
     const { sprintId, filterMode } = req.query;
@@ -271,7 +251,7 @@ router.get('/sprint-board', authenticate, requireDeveloperRole, async (req, res)
 });
 
 // GET /api/developers/time-tracking/stats - Estadísticas de time tracking
-router.get('/time-tracking/stats', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/time-tracking/stats', authenticate, requireDeveloperRole, cacheMiddleware(120), async (req, res) => {
   try {
     const userId = req.user.id;
     const { period = 'week' } = req.query;
@@ -344,6 +324,10 @@ router.post('/time-tracking', authenticate, requireDeveloperRole, validateTimeEn
     
     const timeEntry = await developersService.createTimeEntry(userId, timeData);
     
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/time-tracking`);
+    invalidatePattern(`route_/api/developers/dashboard`);
+    
     res.status(201).json({
       success: true,
       data: timeEntry,
@@ -366,6 +350,10 @@ router.put('/time-tracking/:id', authenticate, requireDeveloperRole, validateObj
     const updateData = req.body;
     
     const updatedEntry = await developersService.updateTimeEntry(id, userId, updateData);
+    
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/time-tracking`);
+    invalidatePattern(`route_/api/developers/dashboard`);
     
     res.json({
       success: true,
@@ -408,6 +396,10 @@ router.delete('/time-tracking/:id', authenticate, requireDeveloperRole, validate
     
     const result = await developersService.deleteTimeEntry(id, userId);
     
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/time-tracking`);
+    invalidatePattern(`route_/api/developers/dashboard`);
+    
     res.json({
       success: true,
       message: result.message
@@ -448,6 +440,9 @@ router.post('/timer/start', authenticate, requireDeveloperRole, validateTimerSta
     
     const timer = await developersService.startTimer(userId, taskId);
     
+    // Invalidar caché de timer activo
+    invalidatePattern(`route_/api/developers/timer/active`);
+    
     res.status(201).json({
       success: true,
       data: timer,
@@ -487,6 +482,11 @@ router.post('/timer/stop', authenticate, requireDeveloperRole, async (req, res) 
     
     const timer = await developersService.stopTimer(userId, description);
     
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/timer/active`);
+    invalidatePattern(`route_/api/developers/time-tracking`);
+    invalidatePattern(`route_/api/developers/dashboard`);
+    
     res.json({
       success: true,
       data: timer,
@@ -511,7 +511,7 @@ router.post('/timer/stop', authenticate, requireDeveloperRole, async (req, res) 
 });
 
 // GET /api/developers/timer/active - Obtener timer activo
-router.get('/timer/active', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/timer/active', authenticate, requireDeveloperRole, cacheMiddleware(10), async (req, res) => {
   try {
     const userId = req.user.id;
     
@@ -533,7 +533,7 @@ router.get('/timer/active', authenticate, requireDeveloperRole, async (req, res)
 });
 
 // GET /api/developers/bug-reports - Obtener reportes de bugs
-router.get('/bug-reports', authenticate, requireDeveloperRole, async (req, res) => {
+router.get('/bug-reports', authenticate, requireDeveloperRole, cacheMiddleware(CACHE_DURATIONS.SHORT), async (req, res) => {
   try {
     const userId = req.user.id;
     const { status, priority, project } = req.query;
@@ -566,6 +566,9 @@ router.post('/bug-reports', authenticate, requireDeveloperRole, validateBugRepor
     const bugData = req.body;
     
     const bugReport = await developersService.createBugReport(userId, bugData);
+    
+    // Invalidar caché de bug reports
+    invalidatePattern(`route_/api/developers/bug-reports`);
     
     res.status(201).json({
       success: true,
@@ -1142,6 +1145,11 @@ router.post('/backlog/:itemId/take', authenticate, requireDeveloperRole, async (
         task: savedTask
       }
     });
+    
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/tasks`);
+    invalidatePattern(`route_/api/developers/sprint-board`);
+    invalidatePattern(`route_/api/developers/dashboard`);
 
   } catch (error) {
     console.error('Error al asignar tarea del backlog:', error);
@@ -1199,6 +1207,7 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
       });
 
       // Mapear estado de Task a estado de BacklogItem
+      // BacklogItem enum: ['pendiente', 'en_progreso', 'en_revision', 'en_pruebas', 'completado']
       let backlogStatus = 'pendiente'; // default
       switch(status) {
         case 'todo':
@@ -1208,10 +1217,10 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
           backlogStatus = 'en_progreso';
           break;
         case 'code_review':
-          backlogStatus = 'revision';
+          backlogStatus = 'en_revision';
           break;
         case 'testing':
-          backlogStatus = 'pruebas';
+          backlogStatus = 'en_pruebas';
           break;
         case 'done':
           backlogStatus = 'completado';
@@ -1237,11 +1246,29 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
 
       console.log('✅ BacklogItem actualizado exitosamente');
 
+      // Convertir BacklogItem a formato Task para consistencia en el frontend
+      const taskFormattedItem = {
+        _id: updatedBacklogItem._id,
+        title: updatedBacklogItem.titulo,
+        description: updatedBacklogItem.descripcion,
+        status: status, // Usar el status original en inglés (ya normalizado)
+        type: updatedBacklogItem.tipo,
+        priority: updatedBacklogItem.prioridad,
+        storyPoints: updatedBacklogItem.puntos_historia,
+        assignee: updatedBacklogItem.asignado_a,
+        sprint: updatedBacklogItem.sprint,
+        parentStory: updatedBacklogItem.historia_padre,
+        tags: updatedBacklogItem.etiquetas,
+        acceptanceCriteria: updatedBacklogItem.criterios_aceptacion,
+        updatedAt: updatedBacklogItem.updatedAt,
+        isTechnicalItem: true
+      };
+
       return res.json({
         success: true,
         message: 'Estado actualizado exitosamente',
         data: {
-          backlogItem: updatedBacklogItem,
+          task: taskFormattedItem, // Enviar como 'task' para consistencia
           type: 'technical'
         }
       });
@@ -1298,6 +1325,11 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
         type: 'regular'
       }
     });
+    
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/tasks`);
+    invalidatePattern(`route_/api/developers/sprint-board`);
+    invalidatePattern(`route_/api/developers/dashboard`);
 
   } catch (error) {
     console.error('Error al actualizar estado de tarea:', error);
@@ -1372,6 +1404,11 @@ router.delete('/tasks/:id/unassign', authenticate, requireDeveloperRole, async (
       success: true,
       message: 'Tarea des-asignada exitosamente. Ahora está disponible nuevamente.'
     });
+    
+    // Invalidar caché relacionado
+    invalidatePattern(`route_/api/developers/tasks`);
+    invalidatePattern(`route_/api/developers/sprint-board`);
+    invalidatePattern(`route_/api/developers/dashboard`);
 
   } catch (error) {
     console.error('Error al des-asignar tarea:', error);

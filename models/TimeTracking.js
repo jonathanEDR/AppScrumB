@@ -69,6 +69,10 @@ timeTrackingSchema.index({ user: 1, createdAt: -1 });
 timeTrackingSchema.index({ task: 1 });
 timeTrackingSchema.index({ sprint: 1 });
 timeTrackingSchema.index({ isActive: 1 });
+// Índices adicionales para módulo Developer (OPTIMIZACIÓN)
+timeTrackingSchema.index({ user: 1, date: -1 }); // Para stats por fecha
+timeTrackingSchema.index({ user: 1, endTime: 1 }); // Para filtrar timers activos/completados
+timeTrackingSchema.index({ task: 1, endTime: 1 }); // Para aggregation de time por task
 
 // Método para calcular duración automáticamente
 timeTrackingSchema.pre('save', function(next) {

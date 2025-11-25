@@ -23,7 +23,7 @@ const BacklogItemSchema = new mongoose.Schema({
   },
   estado: {
     type: String,
-    enum: ['pendiente', 'en_progreso', 'en_revision', 'completado'],
+    enum: ['pendiente', 'en_progreso', 'en_revision', 'en_pruebas', 'completado'],
     default: 'pendiente'
   },
   puntos_historia: {
@@ -98,5 +98,8 @@ BacklogItemSchema.index({ estado: 1 });
 BacklogItemSchema.index({ prioridad: 1 });
 BacklogItemSchema.index({ sprint: 1 });
 BacklogItemSchema.index({ historia_padre: 1 });
+// Índices adicionales para módulo Developer (OPTIMIZACIÓN)
+BacklogItemSchema.index({ asignado_a: 1, estado: 1 }); // Para tareas asignadas
+BacklogItemSchema.index({ asignado_a: 1, sprint: 1 }); // Para sprint board
 
 module.exports = mongoose.models.BacklogItem || mongoose.model('BacklogItem', BacklogItemSchema);

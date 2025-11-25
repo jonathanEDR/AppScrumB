@@ -15,7 +15,7 @@ const mapTaskStatusToBacklogStatus = (taskStatus) => {
     'todo': 'pendiente',
     'in_progress': 'en_progreso',
     'code_review': 'en_revision',
-    'testing': 'en_revision',
+    'testing': 'en_pruebas',
     'done': 'completado'
   };
   return statusMap[taskStatus] || 'pendiente';
@@ -31,7 +31,7 @@ const mapBacklogStatusToTaskStatus = (backlogStatus) => {
     'pendiente': 'todo',
     'en_progreso': 'in_progress',
     'en_revision': 'code_review',
-    'testing': 'testing',
+    'en_pruebas': 'testing',
     'completado': 'done'
   };
   return statusMap[backlogStatus] || 'todo';

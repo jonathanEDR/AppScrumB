@@ -118,11 +118,15 @@ const taskSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Índices
+// Índices para optimizar consultas
 taskSchema.index({ status: 1, assignee: 1 });
 taskSchema.index({ sprint: 1, status: 1 });
 taskSchema.index({ type: 1, priority: 1 });
 taskSchema.index({ assignee: 1, status: 1 });
+// Índices adicionales para módulo Developer (OPTIMIZACIÓN)
+taskSchema.index({ assignee: 1, updatedAt: -1 }); // Para recent tasks y listas
+taskSchema.index({ assignee: 1, sprint: 1 }); // Para filtros por sprint
+taskSchema.index({ assignee: 1, sprint: 1, status: 1 }); // Query compuesta frecuente
 
 // Virtuals
 taskSchema.virtual('isOverdue').get(function() {

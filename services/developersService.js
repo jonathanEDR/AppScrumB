@@ -3,6 +3,8 @@ const TimeTracking = require('../models/TimeTracking');
 const BugReport = require('../models/BugReport');
 const Sprint = require('../models/Sprint');
 const TeamMember = require('../models/TeamMember');
+const SprintHelpers = require('../utils/sprintHelpers');
+const BacklogItemHelpers = require('../utils/backlogItemHelpers');
 
 class DevelopersService {
   /**
@@ -34,58 +36,92 @@ class DevelopersService {
 
   /**
    * Obtiene las métricas del dashboard para un developer
+   * OPTIMIZADO: Usa aggregation pipeline para reducir queries
    */
   async getDashboardMetrics(userId) {
     try {
       const today = new Date();
       const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
       const startOfWeek = new Date(today.setDate(today.getDate() - today.getDay()));
-      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-      // Tareas asignadas activas
-      const assignedTasks = await Task.countDocuments({ 
-        assignee: userId,
-        status: { $ne: 'done' }
-      });
+      // Query 1: Métricas de tareas con aggregation (antes eran 3 queries)
+      const [taskMetrics] = await Task.aggregate([
+        {
+          $facet: {
+            assignedTasks: [
+              { $match: { assignee: userId, status: { $ne: 'done' } } },
+              { $count: 'count' }
+            ],
+            completedToday: [
+              { $match: { assignee: userId, status: 'done', updatedAt: { $gte: startOfDay } } },
+              { $count: 'count' }
+            ],
+            recentTasks: [
+              { $match: { assignee: userId } },
+              { $sort: { updatedAt: -1 } },
+              { $limit: 5 },
+              {
+                $lookup: {
+                  from: 'sprints',
+                  localField: 'sprint',
+                  foreignField: '_id',
+                  as: 'sprint'
+                }
+              },
+              { $unwind: { path: '$sprint', preserveNullAndEmptyArrays: true } },
+              {
+                $project: {
+                  title: 1,
+                  status: 1,
+                  priority: 1,
+                  storyPoints: 1,
+                  updatedAt: 1,
+                  'sprint._id': 1,
+                  'sprint.name': 1,
+                  'sprint.nombre': 1
+                }
+              }
+            ]
+          }
+        }
+      ]);
 
-      // Tareas completadas hoy
-      const completedToday = await Task.countDocuments({
-        assignee: userId,
-        status: 'done',
-        updatedAt: { $gte: startOfDay }
-      });
+      // Query 2: Métricas de time tracking y bugs en paralelo
+      const [timeTrackingResult, bugsResult] = await Promise.all([
+        TimeTracking.aggregate([
+          {
+            $match: {
+              user: userId,
+              date: { $gte: startOfWeek },
+              endTime: { $ne: null }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalSeconds: { $sum: '$duration' }
+            }
+          }
+        ]),
+        BugReport.countDocuments({
+          assignedTo: userId,
+          status: 'resolved',
+          resolvedAt: { $gte: startOfWeek }
+        })
+      ]);
 
-      // Bugs resueltos esta semana
-      const bugsResolvedThisWeek = await BugReport.countDocuments({
-        assignedTo: userId,
-        status: 'resolved',
-        resolvedAt: { $gte: startOfWeek }
-      });
-
-      // Horas trabajadas esta semana
-      const timeEntries = await TimeTracking.find({
-        user: userId,
-        date: { $gte: startOfWeek }
-      });
-      const hoursWorkedThisWeek = timeEntries.reduce((total, entry) => total + entry.hours, 0);
-
-      // Tareas recientes
-      const recentTasks = await Task.find({
-        assignee: userId
-      })
-      .sort({ updatedAt: -1 })
-      .limit(5)
-      .populate('sprint', 'name')
-      .select('title status priority storyPoints updatedAt sprint');
+      // Calcular horas trabajadas (duration está en segundos)
+      const totalSeconds = timeTrackingResult[0]?.totalSeconds || 0;
+      const hoursWorkedThisWeek = Math.round((totalSeconds / 3600) * 10) / 10;
 
       return {
         metrics: {
-          assignedTasks,
-          completedToday,
-          bugsResolvedThisWeek,
-          hoursWorkedThisWeek: Math.round(hoursWorkedThisWeek * 10) / 10
+          assignedTasks: taskMetrics.assignedTasks[0]?.count || 0,
+          completedToday: taskMetrics.completedToday[0]?.count || 0,
+          bugsResolvedThisWeek: bugsResult,
+          hoursWorkedThisWeek: hoursWorkedThisWeek
         },
-        recentTasks
+        recentTasks: taskMetrics.recentTasks || []
       };
     } catch (error) {
       throw new Error(`Error al obtener métricas del dashboard: ${error.message}`);
@@ -151,30 +187,9 @@ class DevelopersService {
    * Obtiene datos del sprint board para el developer
    */
   async getSprintBoardData(userId, sprintId = null, filterMode = 'all') {
-  try {      let sprint;
-      
-      if (sprintId) {
-        sprint = await Sprint.findById(sprintId);
-      } else {
-        // Intentar obtener el sprint activo primero
-        sprint = await Sprint.findOne({
-          estado: 'activo'
-        });
-        
-        // Si no hay sprint activo, buscar el sprint actual por fechas
-        if (!sprint) {
-          const now = new Date();
-          sprint = await Sprint.findOne({
-            fecha_inicio: { $lte: now },
-            fecha_fin: { $gte: now }
-          }).sort({ fecha_inicio: -1 });
-        }
-        
-        // Si aún no hay sprint, tomar el más reciente
-        if (!sprint) {
-          sprint = await Sprint.findOne().sort({ fecha_inicio: -1 });
-        }
-      }
+  try {
+      // Usar SprintHelpers para obtener el sprint (elimina duplicación)
+      const sprint = await SprintHelpers.getSprintByIdOrActive(sprintId);
 
       if (!sprint) {
         throw new Error('No se encontró un sprint disponible');
@@ -251,77 +266,11 @@ class DevelopersService {
 
       console.log('📊 Items técnicos encontrados:', technicalItems.length);
 
-      // Convertir BacklogItems a formato compatible con Task para el frontend
-      const convertedTechnicalItems = technicalItems.map(item => {
-        // Mapear estados de BacklogItem a estados de Task
-        let mappedStatus = 'todo'; // default
-        switch(item.estado) {
-          case 'pendiente':
-            mappedStatus = 'todo';
-            break;
-          case 'en_progreso':
-            mappedStatus = 'in_progress';
-            break;
-          case 'revision':
-            mappedStatus = 'code_review';
-            break;
-          case 'pruebas':
-            mappedStatus = 'testing';
-            break;
-          case 'completado':
-            mappedStatus = 'done';
-            break;
-          default:
-            mappedStatus = 'todo';
-        }
-        
-        // Mapear prioridad
-        let mappedPriority = 'media';
-        switch(item.prioridad) {
-          case 'alta':
-            mappedPriority = 'high';
-            break;
-          case 'media':
-            mappedPriority = 'medium';
-            break;
-          case 'baja':
-            mappedPriority = 'low';
-            break;
-          default:
-            mappedPriority = 'medium';
-        }
+      // Usar BacklogItemHelpers para convertir (elimina duplicación de lógica)
+      const convertedTechnicalItems = BacklogItemHelpers.convertMultipleToTaskFormat(technicalItems);
 
-        const convertedItem = {
-          _id: item._id,
-          title: item.titulo,
-          description: item.descripcion,
-          status: mappedStatus,
-          priority: mappedPriority,
-          storyPoints: item.story_points || 0,
-          type: 'technical', // Marcar como item técnico
-          isBacklogItem: true, // Flag para identificar que es un BacklogItem
-          assignee: item.asignado_a,
-          sprint: item.sprint,
-          historia_padre: item.historia_padre,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-          originalStatus: item.estado // Mantener el estado original para referencia
-        };
-
-        console.log('🔄 Converted technical item:', {
-          originalId: item._id,
-          title: item.titulo,
-          originalStatus: item.estado,
-          mappedStatus: mappedStatus,
-          type: 'technical',
-          isBacklogItem: true
-        });
-
-        return convertedItem;
-      });
-
-      // Combinar tareas regulares e items técnicos
-      const allTasks = [...developerTasks, ...convertedTechnicalItems];
+      // Combinar tareas regulares e items técnicos usando helper
+      const allTasks = BacklogItemHelpers.combineTasksAndBacklogItems(developerTasks, technicalItems);
       
       console.log('✅ Total de elementos para el developer:', {
         tareas: developerTasks.length,
@@ -329,49 +278,18 @@ class DevelopersService {
         total: allTasks.length
       });
 
-      // Para las métricas, usar todas las tareas (regulares + técnicas)
-      const allRelevantTasks = allTasks;
+      // Calcular métricas usando helper
+      const metrics = BacklogItemHelpers.calculateSprintMetrics(allTasks);
 
-      console.log('✅ Elementos del developer mostrados:', {
-        tareas: developerTasks.length,
-        itemsTecnicos: convertedTechnicalItems.length,
-        total: allTasks.length
-      });
-
-      // Calcular métricas basadas en todas las tareas (regulares + técnicas)
-      const totalPoints = allRelevantTasks.reduce((sum, task) => sum + (task.storyPoints || 0), 0);
-      const completedPoints = allRelevantTasks
-        .filter(task => task.status === 'done' || task.status === 'completado')
-        .reduce((sum, task) => sum + (task.storyPoints || 0), 0);
-      
-      const sprintProgress = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0;
-
-      // Mapear campos del sprint para compatibilidad
-      const sprintData = {
-        _id: sprint._id,
-        name: sprint.nombre,
-        goal: sprint.objetivo,
-        startDate: sprint.fecha_inicio,
-        endDate: sprint.fecha_fin,
-        status: sprint.estado,
-        progress: Math.round(sprintProgress)
-      };
+      // Formatear sprint usando helper
+      const sprintData = SprintHelpers.formatSprintForAPI(sprint);
 
       return {
         sprint: sprintData,
         tasks: allTasks, // Todas las tareas (regulares + items técnicos)
-        allTasks: allRelevantTasks, // Para compatibilidad
+        allTasks: allTasks, // Para compatibilidad
         filterMode, // Incluir el modo de filtro en la respuesta
-        metrics: {
-          totalPoints,
-          completedPoints,
-          sprintProgress: Math.round(sprintProgress),
-          todoTasks: allTasks.filter(t => t.status === 'todo' || t.status === 'pendiente').length,
-          inProgressTasks: allTasks.filter(t => t.status === 'in_progress' || t.status === 'en_progreso').length,
-          codeReviewTasks: allTasks.filter(t => t.status === 'code_review' || t.status === 'revision').length,
-          testingTasks: allTasks.filter(t => t.status === 'testing' || t.status === 'pruebas').length,
-          doneTasks: allTasks.filter(t => t.status === 'done' || t.status === 'completado').length
-        }
+        metrics: metrics
       };
     } catch (error) {
       console.error('❌ Error en getSprintBoardData:', error);
@@ -416,72 +334,166 @@ class DevelopersService {
 
   /**
    * Obtiene estadísticas de time tracking para el developer
+   * OPTIMIZADO FASE 5: Usa aggregation pipeline con $facet (4+ queries → 1 query)
    */
   async getTimeTrackingStats(userId, period = 'week') {
     try {
       const now = new Date();
       
-      // Calcular estadísticas por período usando duration (segundos)
-      const getSecondsForPeriod = async (daysBack) => {
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - daysBack);
-        startDate.setHours(0, 0, 0, 0);
-        
-        const entries = await TimeTracking.find({
-          user: userId,
-          date: { $gte: startDate },
-          endTime: { $ne: null } // Solo entradas completadas
-        });
-        
-        return entries.reduce((total, entry) => total + (entry.duration || 0), 0);
-      };
-
-      // Obtener minutos de hoy
-      const today = new Date();
+      // Calcular fechas de corte
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       today.setHours(0, 0, 0, 0);
       
-      const entriesToday = await TimeTracking.find({
-        user: userId,
-        date: { $gte: today },
-        endTime: { $ne: null }
-      });
-      
-      const totalSecondsToday = entriesToday.reduce((total, entry) => total + (entry.duration || 0), 0);
-      const totalSecondsWeek = await getSecondsForPeriod(7);
-      const totalSecondsMonth = await getSecondsForPeriod(30);
-
-      // Contar sesiones activas (timers sin endTime)
-      const activeSessions = await TimeTracking.countDocuments({
-        user: userId,
-        endTime: null
-      });
-
-      // Para compatibilidad, obtener entradas de la semana
-      const weekAgo = new Date();
+      const weekAgo = new Date(today);
       weekAgo.setDate(weekAgo.getDate() - 7);
       
-      const timeEntries = await TimeTracking.find({
-        user: userId,
-        date: { $gte: weekAgo },
-        endTime: { $ne: null }
-      }).populate('task', 'title tipo type');
+      const monthAgo = new Date(today);
+      monthAgo.setDate(monthAgo.getDate() - 30);
 
-      // Agrupar por tipo de tarea
-      const secondsByType = timeEntries.reduce((acc, entry) => {
-        const type = entry.task?.tipo || entry.task?.type || 'other';
-        acc[type] = (acc[type] || 0) + (entry.duration || 0);
-        return acc;
-      }, {});
+      // UNA SOLA QUERY con $facet para todas las métricas
+      const [stats] = await TimeTracking.aggregate([
+        {
+          $match: {
+            user: userId
+          }
+        },
+        {
+          $facet: {
+            // 1. Estadísticas de HOY
+            today: [
+              { 
+                $match: { 
+                  date: { $gte: today },
+                  endTime: { $ne: null }
+                }
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalSeconds: { $sum: '$duration' },
+                  count: { $sum: 1 }
+                }
+              }
+            ],
+            
+            // 2. Estadísticas de la SEMANA
+            week: [
+              { 
+                $match: { 
+                  date: { $gte: weekAgo },
+                  endTime: { $ne: null }
+                }
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalSeconds: { $sum: '$duration' },
+                  count: { $sum: 1 }
+                }
+              }
+            ],
+            
+            // 3. Estadísticas del MES
+            month: [
+              { 
+                $match: { 
+                  date: { $gte: monthAgo },
+                  endTime: { $ne: null }
+                }
+              },
+              {
+                $group: {
+                  _id: null,
+                  totalSeconds: { $sum: '$duration' },
+                  count: { $sum: 1 }
+                }
+              }
+            ],
+            
+            // 4. Sesiones ACTIVAS (timers sin endTime)
+            activeSessions: [
+              { 
+                $match: { 
+                  endTime: null
+                }
+              },
+              { $count: 'count' }
+            ],
+            
+            // 5. Tiempo agrupado por TIPO de tarea (última semana)
+            byType: [
+              { 
+                $match: { 
+                  date: { $gte: weekAgo },
+                  endTime: { $ne: null }
+                }
+              },
+              {
+                $lookup: {
+                  from: 'tasks',
+                  localField: 'task',
+                  foreignField: '_id',
+                  as: 'taskInfo'
+                }
+              },
+              { $unwind: { path: '$taskInfo', preserveNullAndEmptyArrays: true } },
+              {
+                $group: {
+                  _id: { 
+                    $ifNull: [
+                      '$taskInfo.type',
+                      { $ifNull: ['$taskInfo.tipo', 'other'] }
+                    ]
+                  },
+                  totalSeconds: { $sum: '$duration' }
+                }
+              }
+            ],
+            
+            // 6. Tiempo agrupado por DÍA (última semana)
+            byDay: [
+              { 
+                $match: { 
+                  date: { $gte: weekAgo },
+                  endTime: { $ne: null }
+                }
+              },
+              {
+                $group: {
+                  _id: {
+                    $dateToString: { format: '%Y-%m-%d', date: '$date' }
+                  },
+                  totalSeconds: { $sum: '$duration' }
+                }
+              },
+              { $sort: { _id: 1 } }
+            ]
+          }
+        }
+      ]);
 
-      // Agrupar por día
-      const secondsByDay = timeEntries.reduce((acc, entry) => {
-        const day = entry.date.toISOString().split('T')[0];
-        acc[day] = (acc[day] || 0) + (entry.duration || 0);
-        return acc;
-      }, {});
+      // Procesar resultados
+      const totalSecondsToday = stats.today[0]?.totalSeconds || 0;
+      const totalSecondsWeek = stats.week[0]?.totalSeconds || 0;
+      const totalSecondsMonth = stats.month[0]?.totalSeconds || 0;
+      const activeSessions = stats.activeSessions[0]?.count || 0;
 
-      // Calcular promedio diario en minutos
-      const averageDailyMinutes = Math.round(totalSecondsWeek / 60 / 7);
+      // Convertir byType a objeto
+      const secondsByType = {};
+      stats.byType.forEach(item => {
+        secondsByType[item._id] = item.totalSeconds;
+      });
+
+      // Convertir byDay a objeto
+      const secondsByDay = {};
+      stats.byDay.forEach(item => {
+        secondsByDay[item._id] = item.totalSeconds;
+      });
+
+      // Calcular promedio diario
+      const averageDailyMinutes = totalSecondsWeek > 0 
+        ? Math.round(totalSecondsWeek / 60 / 7) 
+        : 0;
 
       return {
         // Formato en minutos para compatibilidad con frontend
@@ -505,7 +517,7 @@ class DevelopersService {
         // Agrupaciones
         secondsByType,
         secondsByDay,
-        entries: timeEntries.length
+        entries: stats.week[0]?.count || 0
       };
     } catch (error) {
       throw new Error(`Error al obtener estadísticas de time tracking: ${error.message}`);

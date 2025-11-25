@@ -323,15 +323,142 @@ router.post('/:id/backlog-items', authenticate, async (req, res) => {
 router.get('/roadmap/:producto_id', async (req, res) => {
   try {
     const { producto_id } = req.params;
+    const { includeTasks = 'true' } = req.query; // Opción para incluir tareas
+    
+    console.log('📊 [ROADMAP] Request:', { producto_id, includeTasks });
     
     const releases = await Release.find({ producto: producto_id })
       .populate('sprints', 'nombre estado fecha_inicio fecha_fin velocidad_planificada velocidad_real')
       .populate('backlog_items', 'titulo estado puntos_historia prioridad')
       .sort({ fecha_objetivo: 1 });
 
+    console.log('📊 [ROADMAP] Releases encontrados:', releases.length);
+
+    // Si includeTasks está activo, agregar tareas agrupadas por sprint
+    let sprintsWithTasks = [];
+    if (includeTasks === 'true') {
+      console.log('📋 [ROADMAP] Procesando tareas...');
+      
+      const Task = require('../models/Task');
+      const BacklogItem = require('../models/BacklogItem');
+      const BacklogItemHelpers = require('../utils/backlogItemHelpers');
+      const { mapBacklogStatusToTaskStatus } = require('../utils/taskMappings');
+      const Sprint = require('../models/Sprint');
+      
+      // Obtener todos los IDs de releases
+      const releaseIds = releases.map(r => r._id);
+      console.log('📋 [ROADMAP] Release IDs:', releaseIds.length);
+      
+      // Buscar sprints que pertenecen a estos releases (por campo release o release_id)
+      const sprintsEnReleases = await Sprint.find({
+        $or: [
+          { release: { $in: releaseIds } },
+          { release_id: { $in: releaseIds } }
+        ]
+      }).select('_id nombre release release_id').lean();
+      
+      const allSprintIds = sprintsEnReleases.map(s => s._id);
+      
+      // Buscar todas las tareas (Task model) de estos sprints
+      const tasks = await Task.find({ 
+        sprint: { $in: allSprintIds } 
+      })
+      .select('_id title status priority storyPoints assignee sprint')
+      .populate('assignee', 'firstName lastName email')
+      .lean();
+      
+      // Buscar todos los items técnicos (BacklogItem) de estos sprints
+      const backlogItems = await BacklogItem.find({ 
+        sprint: { $in: allSprintIds },
+        tipo: { $in: ['tarea', 'bug', 'mejora'] }
+      })
+      .select('titulo estado prioridad puntos_historia story_points asignado_a sprint tipo')
+      .populate('asignado_a', 'firstName lastName email')
+      .lean();
+      
+      // Convertir BacklogItems a formato Task
+      const convertedBacklogItems = backlogItems.map(item => ({
+        _id: item._id,
+        title: item.titulo,
+        status: mapBacklogStatusToTaskStatus(item.estado),
+        priority: item.prioridad || 'medium',
+        storyPoints: item.story_points || item.puntos_historia || 0,
+        assignee: item.asignado_a,
+        sprint: item.sprint,
+        isBacklogItem: true,
+        originalType: item.tipo
+      }));
+      
+      // Combinar tasks regulares y convertidos
+      const allTasks = [...tasks, ...convertedBacklogItems];
+      
+      // Agrupar tareas por sprint y estado
+      const tasksGroupedBySprint = allTasks.reduce((acc, task) => {
+        const sprintId = task.sprint?.toString();
+        if (!sprintId) return acc;
+        
+        if (!acc[sprintId]) {
+          acc[sprintId] = {
+            todo: [],
+            in_progress: [],
+            code_review: [],
+            testing: [],
+            done: []
+          };
+        }
+        
+        const status = task.status || 'todo';
+        if (acc[sprintId][status]) {
+          acc[sprintId][status].push({
+            _id: task._id,
+            title: task.title,
+            status: task.status,
+            priority: task.priority,
+            storyPoints: task.storyPoints,
+            assignee: task.assignee ? {
+              firstName: task.assignee.firstName,
+              lastName: task.assignee.lastName,
+              email: task.assignee.email
+            } : null,
+            isBacklogItem: task.isBacklogItem || false,
+            type: task.originalType || 'task'
+          });
+        }
+        
+        return acc;
+      }, {});
+      
+      // Calcular métricas por sprint
+      sprintsWithTasks = Object.entries(tasksGroupedBySprint).map(([sprintId, tasksByStatus]) => {
+        const totalTasks = Object.values(tasksByStatus).flat().length;
+        const totalPoints = Object.values(tasksByStatus)
+          .flat()
+          .reduce((sum, task) => sum + (task.storyPoints || 0), 0);
+        
+        return {
+          sprintId,
+          tasks: tasksByStatus,
+          metrics: {
+            total: totalTasks,
+            todo: tasksByStatus.todo.length,
+            in_progress: tasksByStatus.in_progress.length,
+            code_review: tasksByStatus.code_review.length,
+            testing: tasksByStatus.testing.length,
+            done: tasksByStatus.done.length,
+            totalPoints,
+            completedPoints: tasksByStatus.done.reduce((sum, t) => sum + (t.storyPoints || 0), 0),
+            progress: totalPoints > 0 
+              ? Math.round((tasksByStatus.done.reduce((sum, t) => sum + (t.storyPoints || 0), 0) / totalPoints) * 100)
+              : 0
+          }
+        };
+      });
+    }
+
     // Calcular métricas de roadmap
     const roadmapData = {
       releases: releases,
+      sprintTasks: sprintsWithTasks, // Nuevo: tareas agrupadas por sprint
       resumen: {
         total_releases: releases.length,
         planificados: releases.filter(r => r.estado === 'planificado').length,

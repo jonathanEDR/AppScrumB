@@ -978,9 +978,14 @@ router.get('/:id/burndown-data', authenticate, async (req, res) => {
     // Días necesarios para completar el trabajo restante
     const daysNeededToComplete = currentVelocity > 0 ? Math.ceil(pointsRemaining / currentVelocity) : Infinity;
     
-    // Fecha estimada de completación
-    const estimatedCompletionDate = new Date(today);
-    estimatedCompletionDate.setDate(estimatedCompletionDate.getDate() + daysNeededToComplete);
+    // Fecha estimada de completación (con validación)
+    let estimatedCompletionDate = new Date(today);
+    if (daysNeededToComplete !== Infinity && !isNaN(daysNeededToComplete)) {
+      estimatedCompletionDate.setDate(estimatedCompletionDate.getDate() + daysNeededToComplete);
+    } else {
+      // Si no se puede calcular, usar fecha fin del sprint
+      estimatedCompletionDate = new Date(endDate);
+    }
     
     // Comparar con fecha fin del sprint
     const willCompleteOnTime = estimatedCompletionDate <= endDate && daysNeededToComplete !== Infinity;
@@ -1036,7 +1041,9 @@ router.get('/:id/burndown-data', authenticate, async (req, res) => {
       prediction: {
         willComplete: willCompleteOnTime,
         daysAheadBehind,
-        estimatedCompletionDate: estimatedCompletionDate.toISOString().split('T')[0],
+        estimatedCompletionDate: isNaN(estimatedCompletionDate.getTime()) 
+          ? endDate.toISOString().split('T')[0] 
+          : estimatedCompletionDate.toISOString().split('T')[0],
         message: predictionMessage
       },
       sprint: {

@@ -205,6 +205,8 @@ bugReportSchema.index({ assignedTo: 1, status: 1 });
 bugReportSchema.index({ priority: 1, status: 1 });
 bugReportSchema.index({ project: 1 });
 bugReportSchema.index({ status: 1 });
+// Índice adicional para módulo Developer (OPTIMIZACIÓN)
+bugReportSchema.index({ reportedBy: 1, status: 1 }); // Para filtros de developer
 
 // Middleware para actualizar resolvedAt cuando se cambia el status
 bugReportSchema.pre('save', function(next) {
