@@ -151,10 +151,7 @@ class DevelopersService {
    * Obtiene datos del sprint board para el developer
    */
   async getSprintBoardData(userId, sprintId = null, filterMode = 'all') {
-    try {
-      console.log('🔍 getSprintBoardData - userId:', userId, 'sprintId:', sprintId, 'filterMode:', filterMode);
-      
-      let sprint;
+  try {      let sprint;
       
       if (sprintId) {
         sprint = await Sprint.findById(sprintId);
@@ -190,9 +187,10 @@ class DevelopersService {
         filterMode
       });
 
-      let developerTasks;
+      let developerTasks = [];
+      let technicalItems = [];
       
-      // Determinar qué tareas mostrar según el modo de filtro
+      // Buscar tareas regulares (Task) asignadas al usuario
       if (filterMode === 'sprint' && sprintId) {
         // Mostrar solo tareas del sprint específico
         developerTasks = await Task.find({ 
@@ -203,7 +201,7 @@ class DevelopersService {
         .populate('sprint', 'nombre estado')
         .sort({ priority: -1, createdAt: -1 });
         
-        console.log('📊 Tareas del sprint específico:', {
+        console.log('📊 Tareas regulares del sprint específico:', {
           sprintId,
           total: developerTasks.length,
           sprintName: sprint.nombre
@@ -215,21 +213,135 @@ class DevelopersService {
           .populate('sprint', 'nombre estado')
           .sort({ priority: -1, createdAt: -1 });
           
-        console.log('📊 Todas las tareas del usuario:', {
+        console.log('📊 Todas las tareas regulares del usuario:', {
           total: developerTasks.length,
           filterMode: 'all'
         });
       }
 
-      // Para las métricas, usar las tareas filtradas
-      const allRelevantTasks = developerTasks;
+      // Buscar items técnicos (BacklogItem) asignados al usuario
+      const BacklogItem = require('../models/BacklogItem');
+      
+      let backlogQuery = { 
+        asignado_a: userId,
+        tipo: { $in: ['tarea', 'bug', 'mejora'] } // Tipos de items técnicos correctos
+      };
+      
+      // Si es modo sprint, buscar items técnicos de historias del sprint
+      if (filterMode === 'sprint' && sprintId) {
+        // Buscar tanto por sprint directo como por historias del sprint
+        const sprintStories = await BacklogItem.find({ 
+          sprint: sprintId, 
+          tipo: 'historia' 
+        }).select('_id');
+        
+        const storyIds = sprintStories.map(s => s._id);
+        
+        backlogQuery.$or = [
+          { sprint: sprintId }, // Items técnicos asignados directamente al sprint
+          { historia_padre: { $in: storyIds } } // Items técnicos de historias del sprint
+        ];
+      }
+      
+      technicalItems = await BacklogItem.find(backlogQuery)
+        .populate('asignado_a', 'firstName lastName nombre_negocio email')
+        .populate('sprint', 'nombre estado')
+        .populate('historia_padre', 'titulo')
+        .sort({ prioridad: -1, createdAt: -1 });
 
-      console.log('✅ Tareas del developer mostradas:', developerTasks.length);
+      console.log('📊 Items técnicos encontrados:', technicalItems.length);
 
-      // Calcular métricas basadas en las tareas filtradas
+      // Convertir BacklogItems a formato compatible con Task para el frontend
+      const convertedTechnicalItems = technicalItems.map(item => {
+        // Mapear estados de BacklogItem a estados de Task
+        let mappedStatus = 'todo'; // default
+        switch(item.estado) {
+          case 'pendiente':
+            mappedStatus = 'todo';
+            break;
+          case 'en_progreso':
+            mappedStatus = 'in_progress';
+            break;
+          case 'revision':
+            mappedStatus = 'code_review';
+            break;
+          case 'pruebas':
+            mappedStatus = 'testing';
+            break;
+          case 'completado':
+            mappedStatus = 'done';
+            break;
+          default:
+            mappedStatus = 'todo';
+        }
+        
+        // Mapear prioridad
+        let mappedPriority = 'media';
+        switch(item.prioridad) {
+          case 'alta':
+            mappedPriority = 'high';
+            break;
+          case 'media':
+            mappedPriority = 'medium';
+            break;
+          case 'baja':
+            mappedPriority = 'low';
+            break;
+          default:
+            mappedPriority = 'medium';
+        }
+
+        const convertedItem = {
+          _id: item._id,
+          title: item.titulo,
+          description: item.descripcion,
+          status: mappedStatus,
+          priority: mappedPriority,
+          storyPoints: item.story_points || 0,
+          type: 'technical', // Marcar como item técnico
+          isBacklogItem: true, // Flag para identificar que es un BacklogItem
+          assignee: item.asignado_a,
+          sprint: item.sprint,
+          historia_padre: item.historia_padre,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+          originalStatus: item.estado // Mantener el estado original para referencia
+        };
+
+        console.log('🔄 Converted technical item:', {
+          originalId: item._id,
+          title: item.titulo,
+          originalStatus: item.estado,
+          mappedStatus: mappedStatus,
+          type: 'technical',
+          isBacklogItem: true
+        });
+
+        return convertedItem;
+      });
+
+      // Combinar tareas regulares e items técnicos
+      const allTasks = [...developerTasks, ...convertedTechnicalItems];
+      
+      console.log('✅ Total de elementos para el developer:', {
+        tareas: developerTasks.length,
+        itemsTecnicos: technicalItems.length,
+        total: allTasks.length
+      });
+
+      // Para las métricas, usar todas las tareas (regulares + técnicas)
+      const allRelevantTasks = allTasks;
+
+      console.log('✅ Elementos del developer mostrados:', {
+        tareas: developerTasks.length,
+        itemsTecnicos: convertedTechnicalItems.length,
+        total: allTasks.length
+      });
+
+      // Calcular métricas basadas en todas las tareas (regulares + técnicas)
       const totalPoints = allRelevantTasks.reduce((sum, task) => sum + (task.storyPoints || 0), 0);
       const completedPoints = allRelevantTasks
-        .filter(task => task.status === 'done')
+        .filter(task => task.status === 'done' || task.status === 'completado')
         .reduce((sum, task) => sum + (task.storyPoints || 0), 0);
       
       const sprintProgress = totalPoints > 0 ? (completedPoints / totalPoints) * 100 : 0;
@@ -247,18 +359,18 @@ class DevelopersService {
 
       return {
         sprint: sprintData,
-        tasks: developerTasks, // Tareas filtradas según el modo
-        allTasks: allRelevantTasks, // Mismas tareas para compatibilidad
+        tasks: allTasks, // Todas las tareas (regulares + items técnicos)
+        allTasks: allRelevantTasks, // Para compatibilidad
         filterMode, // Incluir el modo de filtro en la respuesta
         metrics: {
           totalPoints,
           completedPoints,
           sprintProgress: Math.round(sprintProgress),
-          todoTasks: developerTasks.filter(t => t.status === 'todo').length,
-          inProgressTasks: developerTasks.filter(t => t.status === 'in_progress').length,
-          codeReviewTasks: developerTasks.filter(t => t.status === 'code_review').length,
-          testingTasks: developerTasks.filter(t => t.status === 'testing').length,
-          doneTasks: developerTasks.filter(t => t.status === 'done').length
+          todoTasks: allTasks.filter(t => t.status === 'todo' || t.status === 'pendiente').length,
+          inProgressTasks: allTasks.filter(t => t.status === 'in_progress' || t.status === 'en_progreso').length,
+          codeReviewTasks: allTasks.filter(t => t.status === 'code_review' || t.status === 'revision').length,
+          testingTasks: allTasks.filter(t => t.status === 'testing' || t.status === 'pruebas').length,
+          doneTasks: allTasks.filter(t => t.status === 'done' || t.status === 'completado').length
         }
       };
     } catch (error) {
@@ -309,60 +421,91 @@ class DevelopersService {
     try {
       const now = new Date();
       
-      // Calcular estadísticas por período
-      const getHoursForPeriod = async (daysBack) => {
+      // Calcular estadísticas por período usando duration (segundos)
+      const getSecondsForPeriod = async (daysBack) => {
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - daysBack);
         startDate.setHours(0, 0, 0, 0);
         
         const entries = await TimeTracking.find({
           user: userId,
-          date: { $gte: startDate }
+          date: { $gte: startDate },
+          endTime: { $ne: null } // Solo entradas completadas
         });
         
-        return entries.reduce((total, entry) => total + (entry.hours || 0), 0);
+        return entries.reduce((total, entry) => total + (entry.duration || 0), 0);
       };
 
-      // Obtener horas por período
+      // Obtener minutos de hoy
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
       const entriesToday = await TimeTracking.find({
         user: userId,
-        date: { $gte: today }
+        date: { $gte: today },
+        endTime: { $ne: null }
       });
       
-      const totalHoursToday = entriesToday.reduce((total, entry) => total + (entry.hours || 0), 0);
-      const totalHoursWeek = await getHoursForPeriod(7);
-      const totalHoursMonth = await getHoursForPeriod(30);
+      const totalSecondsToday = entriesToday.reduce((total, entry) => total + (entry.duration || 0), 0);
+      const totalSecondsWeek = await getSecondsForPeriod(7);
+      const totalSecondsMonth = await getSecondsForPeriod(30);
 
-      // Para compatibilidad con código existente, también incluir totalHours
+      // Contar sesiones activas (timers sin endTime)
+      const activeSessions = await TimeTracking.countDocuments({
+        user: userId,
+        endTime: null
+      });
+
+      // Para compatibilidad, obtener entradas de la semana
+      const weekAgo = new Date();
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      
       const timeEntries = await TimeTracking.find({
         user: userId,
-        date: { $gte: new Date(now.setDate(now.getDate() - 7)) }
-      }).populate('task', 'title type');
+        date: { $gte: weekAgo },
+        endTime: { $ne: null }
+      }).populate('task', 'title tipo type');
 
-      const hoursByType = timeEntries.reduce((acc, entry) => {
-        const type = entry.task?.type || 'other';
-        acc[type] = (acc[type] || 0) + entry.hours;
+      // Agrupar por tipo de tarea
+      const secondsByType = timeEntries.reduce((acc, entry) => {
+        const type = entry.task?.tipo || entry.task?.type || 'other';
+        acc[type] = (acc[type] || 0) + (entry.duration || 0);
         return acc;
       }, {});
 
-      const hoursByDay = timeEntries.reduce((acc, entry) => {
+      // Agrupar por día
+      const secondsByDay = timeEntries.reduce((acc, entry) => {
         const day = entry.date.toISOString().split('T')[0];
-        acc[day] = (acc[day] || 0) + entry.hours;
+        acc[day] = (acc[day] || 0) + (entry.duration || 0);
         return acc;
       }, {});
+
+      // Calcular promedio diario en minutos
+      const averageDailyMinutes = Math.round(totalSecondsWeek / 60 / 7);
 
       return {
-        totalHoursToday: Math.round(totalHoursToday * 10) / 10,
-        totalHoursWeek: Math.round(totalHoursWeek * 10) / 10,
-        totalHoursMonth: Math.round(totalHoursMonth * 10) / 10,
-        totalHours: Math.round(totalHoursWeek * 10) / 10,
-        averagePerDay: Math.round((totalHoursWeek / 7) * 10) / 10,
-        hoursByType,
-        hoursByDay,
-        entries: timeEntries
+        // Formato en minutos para compatibilidad con frontend
+        todayMinutes: Math.round(totalSecondsToday / 60),
+        weekMinutes: Math.round(totalSecondsWeek / 60),
+        monthMinutes: Math.round(totalSecondsMonth / 60),
+        averageDailyMinutes: averageDailyMinutes,
+        activeSessions: activeSessions,
+        
+        // En segundos para mayor precisión
+        todaySeconds: totalSecondsToday,
+        weekSeconds: totalSecondsWeek,
+        monthSeconds: totalSecondsMonth,
+        
+        // Para compatibilidad (en horas)
+        totalHoursToday: Math.round((totalSecondsToday / 3600) * 10) / 10,
+        totalHoursWeek: Math.round((totalSecondsWeek / 3600) * 10) / 10,
+        totalHoursMonth: Math.round((totalSecondsMonth / 3600) * 10) / 10,
+        averagePerDay: Math.round((totalSecondsWeek / 3600 / 7) * 10) / 10,
+        
+        // Agrupaciones
+        secondsByType,
+        secondsByDay,
+        entries: timeEntries.length
       };
     } catch (error) {
       throw new Error(`Error al obtener estadísticas de time tracking: ${error.message}`);
@@ -464,14 +607,16 @@ class DevelopersService {
       }
 
       const endTime = new Date();
-      const duration = Math.round((endTime - activeTimer.startTime) / (1000 * 60));
+      // Calcular duración en segundos
+      const durationMs = endTime - activeTimer.startTime;
+      const duration = Math.max(1, Math.round(durationMs / 1000));
 
       activeTimer.endTime = endTime;
       activeTimer.duration = duration;
       activeTimer.description = description;
 
       await activeTimer.save();
-      await activeTimer.populate('task', 'title type');
+      await activeTimer.populate('task', 'title titulo tipo type');
 
       return activeTimer;
     } catch (error) {
@@ -511,7 +656,7 @@ class DevelopersService {
       const { skip = 0, limit = 20 } = options;
 
       const entries = await TimeTracking.find(query)
-        .populate('task', 'title type priority')
+        .populate('task', 'title titulo tipo type priority')
         .sort({ date: -1, startTime: -1 })
         .skip(skip)
         .limit(limit);
@@ -672,25 +817,32 @@ class DevelopersService {
         title,
         description,
         priority,
+        severity,
         type,
         stepsToReproduce,
         expectedBehavior,
         actualBehavior,
         environment,
         project,
+        relatedTask,
         attachments
       } = bugData;
+
+      // Convertir relatedTask singular a relatedTasks array
+      const relatedTasks = relatedTask ? [relatedTask] : [];
 
       const bugReport = new BugReport({
         title,
         description,
         priority: priority || 'medium',
+        severity: severity || 'major',
         type: type || 'bug',
         stepsToReproduce,
         expectedBehavior,
         actualBehavior,
         environment,
         project,
+        relatedTasks,
         reportedBy: userId, // Usar reportedBy en lugar de reporter
         status: 'open',
         attachments: attachments || []
@@ -705,6 +857,10 @@ class DevelopersService {
       
       if (bugReport.project) {
         populateFields.push({ path: 'project', select: 'nombre' });
+      }
+
+      if (bugReport.relatedTasks && bugReport.relatedTasks.length > 0) {
+        populateFields.push({ path: 'relatedTasks', select: 'titulo title status priority' });
       }
       
       await bugReport.populate(populateFields);

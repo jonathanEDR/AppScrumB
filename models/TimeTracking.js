@@ -29,7 +29,7 @@ const timeTrackingSchema = new mongoose.Schema({
     default: null
   },
   duration: {
-    type: Number, // en minutos
+    type: Number, // en segundos
     default: 0
   },
   description: {
@@ -72,15 +72,17 @@ timeTrackingSchema.index({ isActive: 1 });
 
 // Método para calcular duración automáticamente
 timeTrackingSchema.pre('save', function(next) {
-  if (this.startTime && this.endTime) {
-    this.duration = Math.round((this.endTime - this.startTime) / (1000 * 60)); // minutos
+  if (this.startTime && this.endTime && !this.duration) {
+    // Calcular duración en segundos
+    const durationMs = this.endTime - this.startTime;
+    this.duration = Math.max(1, Math.round(durationMs / 1000));
   }
   next();
 });
 
-// Virtual para obtener horas (además de duration en minutos)
+// Virtual para obtener horas (además de duration en segundos)
 timeTrackingSchema.virtual('hours').get(function() {
-  return Math.round((this.duration / 60) * 10) / 10; // Redondear a 1 decimal
+  return Math.round((this.duration / 3600) * 10) / 10; // Redondear a 1 decimal
 });
 
 // Asegurar que los virtuals se incluyan en JSON

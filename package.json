@@ -31,16 +31,20 @@
     "cloudinary:clean": "node scripts/cleanCloudinary.js",
     "cloudinary:clean:dry": "node scripts/cleanCloudinary.js --dry-run",
     "cloudinary:migrate": "node scripts/migrateToCloudinary.js",
-    "cloudinary:migrate:dry": "node scripts/migrateToCloudinary.js --dry-run"
+    "cloudinary:migrate:dry": "node scripts/migrateToCloudinary.js --dry-run",
+    "init:agents": "node scripts/initAgents.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.1",
     "@clerk/clerk-sdk-node": "^5.0.58",
     "@clerk/express": "^1.7.52",
+    "@google/generative-ai": "^0.24.1",
     "body-parser": "^2.2.0",
+    "bull": "^4.16.5",
     "cloudinary": "^1.41.3",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
@@ -54,6 +58,8 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "node-cache": "^5.1.2",
+    "openai": "^6.9.1",
+    "rate-limit-mongo": "^2.3.2",
     "winston": "^3.18.3",
     "winston-daily-rotate-file": "^5.0.0"
   },

@@ -71,49 +71,139 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
     const userId = req.user.id;
     const { status, priority, sprint, search, page = 1, limit = 20 } = req.query;
 
-    // Construir filtros
-    const filters = { assignee: userId };
-    if (status && status !== 'all') filters.status = status;
-    if (priority) filters.priority = priority;
-    if (sprint) filters.sprint = sprint;
+    console.log('=== OBTENIENDO TAREAS DEL DEVELOPER ===');
+    console.log('Developer ID:', userId.toString());
+    console.log('Filtros:', { status, priority, sprint, search, page, limit });
+
+    // === 1. BUSCAR TASKS REGULARES ===
+    const taskFilters = { assignee: userId };
+    if (status && status !== 'all') taskFilters.status = status;
+    if (priority) taskFilters.priority = priority;
+    if (sprint) taskFilters.sprint = sprint;
     if (search) {
-      filters.$or = [
+      taskFilters.$or = [
         { title: { $regex: search, $options: 'i' } },
         { description: { $regex: search, $options: 'i' } }
       ];
     }
 
-    const tasks = await Task.find(filters)
+    const tasks = await Task.find(taskFilters)
       .populate('sprint', 'nombre estado fecha_inicio fecha_fin')
-      .populate('reportedBy', 'firstName lastName email') // Cambiar reporter por reportedBy
+      .populate('reporter', 'firstName lastName email nombre_negocio')
+      .populate('assignee', 'firstName lastName email nombre_negocio')
       .populate('backlogItem', 'titulo')
-      .sort({ updatedAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .sort({ updatedAt: -1 });
 
-    const total = await Task.countDocuments(filters);
+    console.log('📋 Tasks regulares encontradas:', tasks.length);
 
-    // Obtener tiempo tracking para cada tarea
-    const tasksWithTime = await Promise.all(tasks.map(async (task) => {
-      const timeTracking = await TimeTracking.aggregate([
-        {
-          $match: {
-            task: task._id,
-            endTime: { $ne: null }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            totalMinutes: { $sum: '$duration' }
-          }
-        }
-      ]);
+    // === 2. BUSCAR BACKLOG ITEMS ASIGNADOS ===
+    const BacklogItem = require('../models/BacklogItem');
+    const backlogFilters = { asignado_a: userId };
+    
+    if (sprint) backlogFilters.sprint = sprint;
+    if (search) {
+      backlogFilters.$or = [
+        { titulo: { $regex: search, $options: 'i' } },
+        { descripcion: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const backlogItems = await BacklogItem.find(backlogFilters)
+      .populate('sprint', 'nombre estado fecha_inicio fecha_fin')
+      .populate('asignado_a', 'firstName lastName email nombre_negocio')
+      .populate('historia_padre', 'titulo')
+      .sort({ updatedAt: -1 });
+
+    console.log('📋 BacklogItems asignados encontrados:', backlogItems.length);
+
+    // === 3. CONVERTIR BACKLOG ITEMS A FORMATO TASK ===
+    const convertedBacklogItems = backlogItems.map(item => {
+      // Mapear estados
+      const statusMap = {
+        'pendiente': 'todo',
+        'en_progreso': 'in_progress', 
+        'en_revision': 'code_review',
+        'revision': 'code_review',
+        'pruebas': 'testing',
+        'completado': 'done'
+      };
+
+      // Mapear prioridades
+      const priorityMap = {
+        'alta': 'high',
+        'media': 'medium',
+        'baja': 'low'
+      };
 
       return {
-        ...task.toObject(),
-        spentHours: Math.round((timeTracking[0]?.totalMinutes || 0) / 60 * 100) / 100
+        _id: item._id,
+        title: item.titulo,
+        description: item.descripcion,
+        status: statusMap[item.estado] || 'todo',
+        priority: priorityMap[item.prioridad] || 'medium',
+        storyPoints: item.story_points || 0,
+        assignee: item.asignado_a,
+        sprint: item.sprint,
+        type: 'backlog-item', // Marcar el origen
+        backlogItem: {
+          _id: item._id,
+          titulo: item.titulo
+        },
+        historia_padre: item.historia_padre,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        spentHours: 0 // Por ahora sin time tracking para BacklogItems
       };
+    });
+
+    console.log('🔄 BacklogItems convertidos:', convertedBacklogItems.length);
+
+    // === 4. COMBINAR Y FILTRAR POR STATUS SI APLICA ===
+    let allTasks = [...tasks.map(task => ({ ...task.toObject(), type: 'task' })), ...convertedBacklogItems];
+    
+    // Filtrar por status si se especificó (después de convertir)
+    if (status && status !== 'all') {
+      allTasks = allTasks.filter(task => task.status === status);
+    }
+
+    // Filtrar por prioridad si se especificó (después de convertir)
+    if (priority) {
+      allTasks = allTasks.filter(task => task.priority === priority);
+    }
+
+    console.log('✅ Total tareas combinadas:', allTasks.length);
+
+    // === 5. PAGINACIÓN ===
+    const total = allTasks.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + parseInt(limit);
+    const paginatedTasks = allTasks.slice(startIndex, endIndex);
+
+    // === 6. AGREGAR TIME TRACKING PARA TASKS REGULARES ===
+    const tasksWithTime = await Promise.all(paginatedTasks.map(async (task) => {
+      if (task.type === 'task') {
+        const timeTracking = await TimeTracking.aggregate([
+          {
+            $match: {
+              task: task._id,
+              endTime: { $ne: null }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              totalMinutes: { $sum: '$duration' }
+            }
+          }
+        ]);
+
+        return {
+          ...task,
+          spentHours: Math.round((timeTracking[0]?.totalMinutes || 0) / 60 * 100) / 100
+        };
+      }
+      
+      return task; // BacklogItems ya tienen spentHours: 0
     }));
 
     res.json({
@@ -124,6 +214,11 @@ router.get('/tasks', authenticate, requireDeveloperRole, async (req, res) => {
           current: parseInt(page),
           pages: Math.ceil(total / limit),
           total
+        },
+        summary: {
+          totalTasks: tasks.length,
+          totalBacklogItems: backlogItems.length,
+          totalCombined: total
         }
       }
     });
@@ -496,6 +591,7 @@ router.get('/bug-reports/:id', authenticate, requireDeveloperRole, async (req, r
       .populate('assignedTo', 'firstName lastName email role')
       .populate('project', 'nombre')
       .populate('sprint', 'nombre startDate endDate')
+      .populate('relatedTasks', 'titulo title status priority')
       .lean();
 
     if (!bugReport) {
@@ -536,8 +632,8 @@ router.put('/bug-reports/:id', authenticate, requireDeveloperRole, async (req, r
     }
 
     // Verificar permisos: solo el reportedBy, asignado o admin puede actualizar
-    const canUpdate = bugReport.reportedBy.toString() === userId ||
-                      (bugReport.assignedTo && bugReport.assignedTo.toString() === userId) ||
+    const canUpdate = bugReport.reportedBy.toString() === userId.toString() ||
+                      (bugReport.assignedTo && bugReport.assignedTo.toString() === userId.toString()) ||
                       ['scrum_master', 'super_admin'].includes(req.user.role);
 
     if (!canUpdate) {
@@ -781,7 +877,7 @@ router.delete('/bug-reports/:id', authenticate, requireDeveloperRole, async (req
     }
 
     // Solo el reporter o admin puede eliminar
-    const canDelete = bugReport.reportedBy.toString() === userId ||
+    const canDelete = bugReport.reportedBy.toString() === userId.toString() ||
                       ['scrum_master', 'super_admin'].includes(req.user.role);
 
     if (!canDelete) {
@@ -1069,14 +1165,90 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
     console.log('New Status:', status);
     console.log('User ID:', userId);
 
-    // Buscar la task
-    const task = await Task.findById(id);
+    // Primero intentar buscar como Task regular
+    let task = await Task.findById(id);
+    let isBacklogItem = false;
+
     if (!task) {
-      return res.status(404).json({
-        success: false,
-        message: 'Tarea no encontrada'
+      // Si no es una Task, verificar si es un BacklogItem
+      console.log('🔍 Task no encontrada, buscando como BacklogItem...');
+      
+      const BacklogItem = require('../models/BacklogItem');
+      const backlogItem = await BacklogItem.findById(id);
+      
+      if (!backlogItem) {
+        return res.status(404).json({
+          success: false,
+          message: 'Tarea no encontrada'
+        });
+      }
+
+      // Verificar que el usuario es el asignado al BacklogItem
+      if (backlogItem.asignado_a.toString() !== userId.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'No tienes permisos para actualizar esta tarea'
+        });
+      }
+
+      console.log('✅ BacklogItem encontrado:', {
+        id: backlogItem._id,
+        titulo: backlogItem.titulo,
+        estadoActual: backlogItem.estado,
+        nuevoEstado: status
+      });
+
+      // Mapear estado de Task a estado de BacklogItem
+      let backlogStatus = 'pendiente'; // default
+      switch(status) {
+        case 'todo':
+          backlogStatus = 'pendiente';
+          break;
+        case 'in_progress':
+          backlogStatus = 'en_progreso';
+          break;
+        case 'code_review':
+          backlogStatus = 'revision';
+          break;
+        case 'testing':
+          backlogStatus = 'pruebas';
+          break;
+        case 'done':
+          backlogStatus = 'completado';
+          break;
+        default:
+          backlogStatus = 'pendiente';
+      }
+
+      // Actualizar el BacklogItem
+      const updatedBacklogItem = await BacklogItem.findByIdAndUpdate(
+        id,
+        { 
+          estado: backlogStatus,
+          updated_by: userId,
+          updatedAt: new Date()
+        },
+        { new: true, runValidators: true }
+      ).populate([
+        { path: 'asignado_a', select: 'firstName lastName email' },
+        { path: 'sprint', select: 'nombre estado fecha_inicio fecha_fin' },
+        { path: 'historia_padre', select: 'titulo' }
+      ]);
+
+      console.log('✅ BacklogItem actualizado exitosamente');
+
+      return res.json({
+        success: true,
+        message: 'Estado actualizado exitosamente',
+        data: {
+          backlogItem: updatedBacklogItem,
+          type: 'technical'
+        }
       });
     }
+
+    // Si llegamos aquí, es una Task regular
+    console.log('✅ Task regular encontrada');
 
     // Verificar que el usuario es el asignado
     if (task.assignee.toString() !== userId.toString()) {
@@ -1116,18 +1288,93 @@ router.put('/tasks/:id/status', authenticate, requireDeveloperRole, async (req, 
       console.log('✅ Estado sincronizado con BacklogItem:', backlogStatus);
     }
 
-    console.log('✅ Task actualizada exitosamente');
+    console.log('✅ Task regular actualizada exitosamente');
 
     res.json({
       success: true,
       message: 'Estado actualizado exitosamente',
       data: {
-        task: updatedTask
+        task: updatedTask,
+        type: 'regular'
       }
     });
 
   } catch (error) {
     console.error('Error al actualizar estado de tarea:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+// DELETE /api/developers/tasks/:id/unassign - Des-asignar una tarea (devolverla al backlog)
+router.delete('/tasks/:id/unassign', authenticate, requireDeveloperRole, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user._id || req.user.id;
+
+    console.log('=== DEVELOPER UNASSIGNING TASK ===');
+    console.log('Task ID:', id);
+    console.log('User ID:', userId);
+
+    // Buscar la task
+    const task = await Task.findById(id);
+    if (!task) {
+      return res.status(404).json({
+        success: false,
+        message: 'Tarea no encontrada'
+      });
+    }
+
+    // Verificar que el usuario es el asignado
+    if (task.assignee.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'No tienes permisos para des-asignar esta tarea'
+      });
+    }
+
+    // Si tiene backlogItem, des-asignar también del backlog
+    if (task.backlogItem) {
+      const BacklogItem = require('../models/BacklogItem');
+      await BacklogItem.findByIdAndUpdate(
+        task.backlogItem,
+        { 
+          $unset: { asignado_a: 1 }, // Remover asignación
+          estado: 'pendiente', // Volver a pendiente
+          updated_by: userId
+        }
+      );
+      console.log('✅ BacklogItem des-asignado');
+    }
+
+    // Eliminar la task (ya que fue auto-creada al asignarse)
+    await Task.findByIdAndDelete(id);
+    console.log('✅ Task eliminada');
+
+    // Detener timer si está activo
+    const activeTimer = await TimeTracking.findOne({
+      user: userId,
+      endTime: null
+    });
+
+    if (activeTimer && activeTimer.task.toString() === id) {
+      activeTimer.endTime = new Date();
+      activeTimer.duration = Math.floor((activeTimer.endTime - activeTimer.startTime) / 1000 / 60);
+      activeTimer.description = 'Tarea des-asignada';
+      await activeTimer.save();
+      console.log('✅ Timer activo detenido');
+    }
+
+    res.json({
+      success: true,
+      message: 'Tarea des-asignada exitosamente. Ahora está disponible nuevamente.'
+    });
+
+  } catch (error) {
+    console.error('Error al des-asignar tarea:', error);
     res.status(500).json({
       success: false,
       error: 'Error interno del servidor',

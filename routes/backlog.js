@@ -1,6 +1,7 @@
 const express = require('express');
 const BacklogItem = require('../models/BacklogItem');
 const Product = require('../models/Product');
+const BacklogService = require('../services/BacklogService');
 const { 
   authenticate, 
   authorize 
@@ -15,80 +16,19 @@ const requireScrumMasterOrAbove = authorize('scrum_master', 'product_owner', 'su
 // Obtener items del backlog
 router.get('/backlog', authenticate, async (req, res) => {
   try {
-    const { 
-      producto, 
-      estado, 
-      prioridad,
-      tipo,
-      available_only, // Nuevo parámetro para filtrar solo tareas disponibles
-      search = '', 
-      page = 1, 
-      limit = 20 
-    } = req.query;
-    
     console.log('=== FETCHING BACKLOG ITEMS ===');
     console.log('Query params:', req.query);
     console.log('User role:', req.user?.role);
     
-    const skip = (page - 1) * limit;
-    let filter = {};
+    const result = await BacklogService.getBacklogItems(req.query, req.query);
     
-    if (producto) filter.producto = producto;
-    if (estado) filter.estado = estado;
-    if (prioridad) filter.prioridad = prioridad;
-    
-    // Si available_only=true, filtrar solo tareas no asignadas y pendientes
-    if (available_only === 'true') {
-      filter.$or = [
-        { estado: 'pendiente' },
-        { estado: { $exists: false } }
-      ];
-      filter.estado = { $in: ['pendiente', 'en_progreso'] }; // Estados disponibles
-      console.log('Filtrando solo tareas disponibles (no asignadas)');
+    if (!result.success) {
+      return res.status(400).json({ message: result.error });
     }
     
-    // Soporte para filtrar por tipo (puede ser múltiple)
-    if (tipo) {
-      if (Array.isArray(tipo)) {
-        filter.tipo = { $in: tipo };
-      } else if (typeof tipo === 'string') {
-        // Si viene como string separado por comas
-        const tipos = tipo.split(',').map(t => t.trim());
-        filter.tipo = tipos.length === 1 ? tipos[0] : { $in: tipos };
-      }
-    }
+    console.log(`Found ${result.items.length} items out of ${result.pagination.total_items} total`);
     
-    if (search) {
-      filter.$or = [
-        { titulo: { $regex: search, $options: 'i' } },
-        { descripcion: { $regex: search, $options: 'i' } }
-      ];
-    }
-    
-    console.log('Final filter:', JSON.stringify(filter, null, 2));
-    
-    const [items, total] = await Promise.all([
-      BacklogItem.find(filter)
-        .populate('producto', 'nombre')
-        .populate('asignado_a', 'nombre_negocio email')
-        .populate('sprint', 'nombre')
-        .sort({ orden: 1, prioridad: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit)),
-      BacklogItem.countDocuments(filter)
-    ]);
-    
-    console.log(`Found ${items.length} items out of ${total} total`);
-    
-    res.json({
-      items,
-      pagination: {
-        current_page: parseInt(page),
-        total_pages: Math.ceil(total / limit),
-        total_items: total,
-        per_page: parseInt(limit)
-      }
-    });
+    res.json(result);
   } catch (error) {
     console.error('Error obteniendo backlog:', error);
     res.status(500).json({ message: 'Error al obtener backlog', error: error.message });
@@ -102,74 +42,13 @@ router.post('/backlog', authenticate, requireProductOwnerOrAbove, async (req, re
     console.log('Request body:', req.body);
     console.log('User:', req.user?._id);
     
-    const { 
-      titulo, 
-      descripcion, 
-      tipo, 
-      prioridad, 
-      producto, 
-      puntos_historia,
-      asignado_a,
-      sprint,
-      criterios_aceptacion,
-      etiquetas 
-    } = req.body;
+    const result = await BacklogService.createBacklogItem(req.body, req.user._id);
     
-    if (!titulo || !descripcion || !producto) {
-      return res.status(400).json({ 
-        message: 'Título, descripción y producto son requeridos' 
-      });
+    if (!result.success) {
+      return res.status(400).json({ message: result.error });
     }
     
-    // Obtener el siguiente número de orden
-    const lastItem = await BacklogItem.findOne({ producto })
-      .sort({ orden: -1 })
-      .select('orden');
-    const orden = lastItem ? lastItem.orden + 1 : 1;
-    
-    // Limpiar campos ObjectId vacíos para creación
-    const cleanAsignado = asignado_a && asignado_a.trim() !== '' ? asignado_a : undefined;
-    const cleanSprint = sprint && sprint.trim() !== '' ? sprint : undefined;
-    
-    console.log('Clean data for creation:');
-    console.log('- título:', titulo);
-    console.log('- prioridad:', prioridad);
-    console.log('- producto:', producto);
-    console.log('- sprint:', cleanSprint);
-    console.log('- asignado_a:', cleanAsignado);
-    console.log('- criterios_aceptacion:', criterios_aceptacion);
-    
-    const nuevoItem = new BacklogItem({
-      titulo,
-      descripcion,
-      tipo,
-      prioridad,
-      producto,
-      puntos_historia,
-      asignado_a: cleanAsignado,
-      sprint: cleanSprint,
-      criterios_aceptacion,
-      etiquetas,
-      orden,
-      created_by: req.user._id,
-      updated_by: req.user._id
-    });
-    
-    const savedItem = await nuevoItem.save();
-    console.log('✅ Item saved with ID:', savedItem._id);
-    console.log('- Sprint field:', savedItem.sprint);
-    console.log('- Producto field:', savedItem.producto);
-    
-    await savedItem.populate([
-      { path: 'producto', select: 'nombre' },
-      { path: 'asignado_a', select: 'nombre_negocio email' },
-      { path: 'sprint', select: 'nombre' }
-    ]);
-    
-    res.status(201).json({
-      message: 'Item creado exitosamente',
-      item: nuevoItem
-    });
+    res.status(201).json(result);
   } catch (error) {
     console.error('Error creando item:', error);
     res.status(500).json({ message: 'Error al crear item', error: error.message });
@@ -179,89 +58,13 @@ router.post('/backlog', authenticate, requireProductOwnerOrAbove, async (req, re
 // Endpoint específico para Scrum Master - crear tareas técnicas (tareas, bugs, mejoras)
 router.post('/backlog/technical', authenticate, requireScrumMasterOrAbove, async (req, res) => {
   try {
-    console.log('=== SCRUM MASTER CREATING TECHNICAL ITEM ===');
-    console.log('Request body:', req.body);
-    console.log('User role:', req.user?.role);
+    const result = await BacklogService.createTechnicalItem(req.body, req.user._id);
     
-    const { 
-      titulo, 
-      descripcion, 
-      tipo, 
-      prioridad, 
-      producto, 
-      puntos_historia,
-      asignado_a,
-      sprint,
-      criterios_aceptacion,
-      etiquetas 
-    } = req.body;
-    
-    // Validar que solo puede crear tipos técnicos
-    const allowedTypes = ['tarea', 'bug', 'mejora'];
-    if (!allowedTypes.includes(tipo)) {
-      return res.status(400).json({ 
-        message: 'Scrum Master solo puede crear tareas, bugs y mejoras. Para historias de usuario contacte al Product Owner.',
-        allowed_types: allowedTypes,
-        provided_type: tipo
-      });
+    if (!result.success) {
+      return res.status(400).json({ message: result.error, ...result });
     }
     
-    if (!titulo || !descripcion || !producto) {
-      return res.status(400).json({ 
-        message: 'Título, descripción y producto son requeridos' 
-      });
-    }
-    
-    // Obtener el siguiente número de orden
-    const lastItem = await BacklogItem.findOne({ producto })
-      .sort({ orden: -1 })
-      .select('orden');
-    const orden = lastItem ? lastItem.orden + 1 : 1;
-    
-    // Limpiar campos ObjectId vacíos para creación
-    const cleanAsignado = asignado_a && asignado_a.trim() !== '' ? asignado_a : undefined;
-    const cleanSprint = sprint && sprint.trim() !== '' ? sprint : undefined;
-    
-    console.log('Technical item data for Scrum Master:');
-    console.log('- título:', titulo);
-    console.log('- tipo:', tipo);
-    console.log('- prioridad:', prioridad);
-    console.log('- producto:', producto);
-    console.log('- sprint:', cleanSprint);
-    console.log('- asignado_a:', cleanAsignado);
-    
-    const nuevoItem = new BacklogItem({
-      titulo,
-      descripcion,
-      tipo,
-      prioridad,
-      producto,
-      puntos_historia,
-      asignado_a: cleanAsignado,
-      sprint: cleanSprint,
-      criterios_aceptacion,
-      etiquetas,
-      orden,
-      created_by: req.user._id,
-      updated_by: req.user._id
-    });
-    
-    const savedItem = await nuevoItem.save();
-    console.log('✅ Technical item saved by Scrum Master with ID:', savedItem._id);
-    console.log('- Type:', savedItem.tipo);
-    console.log('- Sprint field:', savedItem.sprint);
-    console.log('- Producto field:', savedItem.producto);
-    
-    await savedItem.populate([
-      { path: 'producto', select: 'nombre' },
-      { path: 'asignado_a', select: 'nombre_negocio email' },
-      { path: 'sprint', select: 'nombre' }
-    ]);
-    
-    res.status(201).json({
-      message: `${tipo.charAt(0).toUpperCase() + tipo.slice(1)} creada exitosamente por Scrum Master`,
-      item: savedItem
-    });
+    res.status(201).json(result);
   } catch (error) {
     console.error('Error creando item técnico:', error);
     res.status(500).json({ message: 'Error al crear item técnico', error: error.message });
@@ -272,46 +75,15 @@ router.post('/backlog/technical', authenticate, requireScrumMasterOrAbove, async
 router.put('/backlog/:id', authenticate, requireProductOwnerOrAbove, async (req, res) => {
   try {
     const { id } = req.params;
-    console.log('Actualizando item:', id);
-    console.log('Datos recibidos:', req.body);
     
-    const updates = { ...req.body, updated_by: req.user._id };
+    const result = await BacklogService.updateBacklogItem(id, req.body, req.user._id);
     
-    // Manejar asignación especial 'me' para auto-asignarse
-    if (updates.asignado_a === 'me') {
-      updates.asignado_a = req.user._id;
-      console.log('Auto-asignando tarea al usuario actual:', req.user._id);
+    if (!result.success) {
+      const status = result.error === 'Item no encontrado' ? 404 : 400;
+      return res.status(status).json({ message: result.error });
     }
     
-    // Limpiar campos ObjectId vacíos
-    if (updates.asignado_a === '' || updates.asignado_a === null) {
-      delete updates.asignado_a;
-    }
-    if (updates.sprint === '' || updates.sprint === null) {
-      delete updates.sprint;
-    }
-    
-    console.log('Updates finales:', updates);
-    
-    const item = await BacklogItem.findByIdAndUpdate(
-      id,
-      updates,
-      { new: true, runValidators: true }
-    ).populate([
-      { path: 'producto', select: 'nombre' },
-      { path: 'asignado_a', select: 'nombre_negocio email' },
-      { path: 'sprint', select: 'nombre' }
-    ]);
-    
-    if (!item) {
-      return res.status(404).json({ message: 'Item no encontrado' });
-    }
-    
-    console.log('Item actualizado exitosamente:', item._id);
-    res.json({
-      message: 'Item actualizado exitosamente',
-      item
-    });
+    res.json(result);
   } catch (error) {
     console.error('Error actualizando item:', error);
     res.status(500).json({ message: 'Error al actualizar item', error: error.message });
@@ -323,20 +95,13 @@ router.put('/backlog/reorder', authenticate, requireProductOwnerOrAbove, async (
   try {
     const { items } = req.body; // Array de { id, orden }
     
-    if (!Array.isArray(items)) {
-      return res.status(400).json({ message: 'Items debe ser un array' });
+    const result = await BacklogService.reorderBacklog(items, req.user._id);
+    
+    if (!result.success) {
+      return res.status(400).json({ message: result.error });
     }
     
-    const bulkOps = items.map(item => ({
-      updateOne: {
-        filter: { _id: item.id },
-        update: { orden: item.orden, updated_by: req.user._id }
-      }
-    }));
-    
-    await BacklogItem.bulkWrite(bulkOps);
-    
-    res.json({ message: 'Backlog reordenado exitosamente' });
+    res.json(result);
   } catch (error) {
     console.error('Error reordenando backlog:', error);
     res.status(500).json({ message: 'Error al reordenar backlog', error: error.message });
@@ -348,12 +113,14 @@ router.delete('/backlog/:id', authenticate, requireProductOwnerOrAbove, async (r
   try {
     const { id } = req.params;
     
-    const item = await BacklogItem.findByIdAndDelete(id);
-    if (!item) {
-      return res.status(404).json({ message: 'Item no encontrado' });
+    const result = await BacklogService.deleteBacklogItem(id);
+    
+    if (!result.success) {
+      const status = result.error === 'Item no encontrado' ? 404 : 400;
+      return res.status(status).json({ message: result.error });
     }
     
-    res.json({ message: 'Item eliminado exitosamente' });
+    res.json(result);
   } catch (error) {
     console.error('Error eliminando item:', error);
     res.status(500).json({ message: 'Error al eliminar item', error: error.message });
@@ -371,78 +138,318 @@ router.put('/backlog/:itemId/assign-to-story', authenticate, requireScrumMasterO
     console.log('Historia ID:', historia_id);
     console.log('User role:', req.user?.role);
     
-    // Verificar que el item técnico existe y es del tipo correcto
-    const itemTecnico = await BacklogItem.findById(itemId);
-    if (!itemTecnico) {
-      return res.status(404).json({ message: 'Item técnico no encontrado' });
-    }
+    const result = await BacklogService.assignTechnicalItemToStory(itemId, historia_id);
     
-    if (!['tarea', 'bug', 'mejora'].includes(itemTecnico.tipo)) {
-      return res.status(400).json({ 
-        message: 'Solo se pueden asignar tareas, bugs y mejoras a historias',
-        item_type: itemTecnico.tipo 
-      });
+    if (!result.success) {
+      const status = result.error.includes('no encontrad') ? 404 : 400;
+      return res.status(status).json({ message: result.error, ...result });
     }
-    
-    // Si se proporciona historia_id, verificar que existe y es una historia
-    let historia = null;
-    if (historia_id) {
-      historia = await BacklogItem.findById(historia_id);
-      if (!historia) {
-        return res.status(404).json({ message: 'Historia no encontrada' });
-      }
-      
-      if (historia.tipo !== 'historia') {
-        return res.status(400).json({ 
-          message: 'Solo se puede asignar a items de tipo historia',
-          target_type: historia.tipo 
-        });
-      }
-      
-      // Verificar que ambos items están en el mismo sprint (si tienen sprint)
-      if (itemTecnico.sprint && historia.sprint && 
-          itemTecnico.sprint.toString() !== historia.sprint.toString()) {
-        return res.status(400).json({ 
-          message: 'El item técnico y la historia deben estar en el mismo sprint' 
-        });
-      }
-    }
-    
-    // Actualizar el item técnico
-    const updatedItem = await BacklogItem.findByIdAndUpdate(
-      itemId,
-      { 
-        historia_padre: historia_id || null,
-        updated_by: req.user._id 
-      },
-      { new: true, runValidators: true }
-    ).populate([
-      { path: 'producto', select: 'nombre' },
-      { path: 'asignado_a', select: 'nombre_negocio email' },
-      { path: 'sprint', select: 'nombre' },
-      { path: 'historia_padre', select: 'titulo tipo' }
-    ]);
     
     console.log('✅ Item técnico asignado exitosamente');
-    console.log('- Item:', updatedItem.titulo);
-    console.log('- Historia padre:', historia?.titulo || 'Sin asignar');
+    console.log('- Item:', result.item.titulo);
+    console.log('- Historia padre:', result.item.historia_padre?.titulo || 'Sin asignar');
     
-    res.json({
-      message: historia_id ? 
-        `${itemTecnico.tipo} asignada a historia exitosamente` : 
-        `${itemTecnico.tipo} desasignada de historia`,
-      item: updatedItem,
-      historia: historia ? {
-        _id: historia._id,
-        titulo: historia.titulo,
-        tipo: historia.tipo
-      } : null
-    });
-    
+    res.json(result);
   } catch (error) {
     console.error('Error asignando item a historia:', error);
     res.status(500).json({ 
       message: 'Error al asignar item a historia', 
+      error: error.message 
+    });
+  }
+});
+
+// Asignar item técnico a un usuario (developer)
+router.put('/backlog/:itemId/assign-user', authenticate, requireScrumMasterOrAbove, async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { user_id } = req.body;
+    
+    // Buscar el item
+    const item = await BacklogItem.findById(itemId);
+    
+    if (!item) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Item técnico no encontrado' 
+      });
+    }
+    
+    console.log('=== VERIFICACIÓN COMPLETA DEL ITEM ===');
+    console.log('Item encontrado:', {
+      _id: item._id,
+      titulo: item.titulo,
+      tipo: item.tipo,
+      asignado_a: item.asignado_a,
+      estado: item.estado
+    });
+
+    // Si se proporciona user_id, validar que el usuario existe
+    if (user_id) {
+      const User = require('../models/User');
+      const TeamMember = require('../models/TeamMember');
+      
+      const targetUser = await User.findById(user_id);
+      
+      if (!targetUser) {
+        console.log('❌ Usuario no encontrado:', user_id);
+        return res.status(404).json({ 
+          success: false,
+          message: 'Usuario no encontrado' 
+        });
+      }
+      
+      console.log('✅ Usuario encontrado:', {
+        id: targetUser._id,
+        email: targetUser.email,
+        role: targetUser.role
+      });
+      
+      // Buscar si el usuario es un TeamMember con rol developer
+      const teamMember = await TeamMember.findOne({ 'user': user_id });
+      console.log('TeamMember encontrado:', teamMember ? {
+        id: teamMember._id,
+        role: teamMember.role,
+        user: teamMember.user
+      } : 'null');
+      
+      // Validar que el usuario tenga rol developer en User O en TeamMember
+      const isValidDeveloper = (
+        targetUser.role === 'developer' || 
+        targetUser.role === 'developers' ||
+        (teamMember && (teamMember.role === 'developer' || teamMember.role === 'developers'))
+      );
+      
+      console.log('Validación de desarrollador:', {
+        userRole: targetUser.role,
+        teamMemberRole: teamMember?.role,
+        isValidDeveloper
+      });
+      
+      if (!isValidDeveloper) {
+        console.log('❌ Usuario no es desarrollador válido');
+        return res.status(400).json({ 
+          success: false,
+          message: 'Solo se pueden asignar items técnicos a usuarios con rol Developer' 
+        });
+      }
+    }
+    
+    // Actualizar el item
+    console.log('📝 Estado actual del item antes de actualizar:', {
+      _id: item._id,
+      asignado_a: item.asignado_a,
+      estado: item.estado,
+      titulo: item.titulo
+    });
+    
+    item.asignado_a = user_id || null;
+    item.updated_by = req.user._id;
+    
+    // Si se está asignando, cambiar estado a en_progreso (si está pendiente)
+    if (user_id && item.estado === 'pendiente') {
+      item.estado = 'en_progreso';
+      console.log('🔄 Cambiando estado: pendiente → en_progreso');
+    }
+    
+    // Si se está des-asignando, volver a pendiente (si está en_progreso)
+    if (!user_id && item.estado === 'en_progreso') {
+      item.estado = 'pendiente';
+      console.log('🔄 Cambiando estado: en_progreso → pendiente');
+    }
+    
+    const updatedItem = await item.save();
+    
+    console.log('✅ Item actualizado exitosamente:', {
+      _id: updatedItem._id,
+      asignado_a: updatedItem.asignado_a,
+      estado: updatedItem.estado,
+      titulo: updatedItem.titulo,
+      tipo: updatedItem.tipo
+    });
+
+    console.log('🔍 Verificando condiciones para crear Task:', {
+      user_id: user_id,
+      item_tipo: item.tipo,
+      condicion_cumplida: !!(user_id && item.tipo === 'tecnico')
+    });
+
+    // Si se está asignando a un usuario, crear también una Task para mantener consistencia
+    if (user_id && item.tipo === 'tecnico') {
+      console.log('🔨 Creando Task para item técnico asignado...');
+      
+      const Task = require('../models/Task');
+      
+      // Mapear prioridad de BacklogItem a Task
+      const mapPriority = (priority) => {
+        switch(priority) {
+          case 'alta': return 'high';
+          case 'media': return 'medium';
+          case 'baja': return 'low';
+          default: return 'medium';
+        }
+      };
+
+      // Mapear estado de BacklogItem a Task  
+      const mapStatus = (status) => {
+        switch(status) {
+          case 'pendiente': return 'todo';
+          case 'en_progreso': return 'in_progress';
+          case 'revision': return 'code_review';
+          case 'pruebas': return 'testing';
+          case 'completado': return 'done';
+          default: return 'todo';
+        }
+      };
+
+      // Verificar si ya existe una Task para este item
+      const existingTask = await Task.findOne({ backlogItem: item._id });
+      
+      if (!existingTask) {
+        const newTask = new Task({
+          title: item.titulo,
+          description: item.descripcion,
+          status: mapStatus(item.estado),
+          priority: mapPriority(item.prioridad),
+          storyPoints: item.story_points || 0,
+          assignee: user_id,
+          reporter: req.user._id,
+          sprint: item.sprint,
+          backlogItem: item._id,
+          type: 'feature'
+        });
+
+        const savedTask = await newTask.save();
+        console.log('✅ Task creada automáticamente:', savedTask._id);
+      } else {
+        // Si ya existe, actualizar la asignación
+        existingTask.assignee = user_id;
+        existingTask.status = mapStatus(item.estado);
+        await existingTask.save();
+        console.log('🔄 Task existente actualizada:', existingTask._id);
+      }
+    }
+
+    // Si se está des-asignando, también actualizar/eliminar la Task
+    if (!user_id && item.tipo === 'tecnico') {
+      console.log('🗑️ Des-asignando Task relacionada...');
+      
+      const Task = require('../models/Task');
+      const relatedTask = await Task.findOne({ backlogItem: item._id });
+      
+      if (relatedTask) {
+        relatedTask.assignee = null;
+        relatedTask.status = 'todo';
+        await relatedTask.save();
+        console.log('🔄 Task des-asignada:', relatedTask._id);
+      }
+    }
+    
+    // Poblar datos para respuesta
+    await item.populate([
+      { path: 'producto', select: 'nombre' },
+      { path: 'asignado_a', select: 'nombre_negocio email role' },
+      { path: 'sprint', select: 'nombre' },
+      { path: 'historia_padre', select: 'titulo' }
+    ]);
+    
+    res.json({
+      success: true,
+      message: user_id ? 'Item asignado al usuario exitosamente' : 'Item des-asignado exitosamente',
+      item: item
+    });
+    
+  } catch (error) {
+    console.error('Error asignando item a usuario:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error al asignar item a usuario', 
+      error: error.message 
+    });
+  }
+});
+
+// Obtener progreso real de items técnicos de una historia
+router.get('/backlog/story/:storyId/technical-progress', authenticate, async (req, res) => {
+  try {
+    const storyId = req.params.storyId;
+    
+    console.log('🔍 Calculando progreso para historia:', storyId);
+    
+    // Buscar items técnicos de la historia con los tipos correctos
+    const technicalItems = await BacklogItem.find({
+      historia_padre: storyId,  // Campo correcto
+      tipo: { $in: ['tarea', 'bug', 'mejora'] }  // Tipos correctos
+    });
+    
+    console.log(`📊 Items técnicos encontrados para la historia: ${technicalItems.length}`);
+    
+    let totalItems = 0;
+    let completedItems = 0;
+    let inProgressItems = 0;
+    let pendingItems = 0;
+    
+    // Para cada item técnico, verificar su estado real
+    for (const item of technicalItems) {
+      totalItems++;
+      
+      // Buscar si existe una Task asociada
+      const Task = require('../models/Task');
+      const relatedTask = await Task.findOne({ backlogItem: item._id });
+      
+      let realStatus = item.estado; // Estado por defecto del BacklogItem
+      
+      if (relatedTask) {
+        // Si hay Task, usar su estado como el real
+        const taskStatusMap = {
+          'todo': 'pendiente',
+          'in_progress': 'en_progreso', 
+          'code_review': 'en_revision',
+          'testing': 'en_pruebas',
+          'done': 'completado'
+        };
+        realStatus = taskStatusMap[relatedTask.status] || item.estado;
+      }
+      
+      // Contar según el estado real
+      if (realStatus === 'completado' || realStatus === 'done') {
+        completedItems++;
+      } else if (realStatus === 'en_progreso' || realStatus === 'en_revision' || realStatus === 'en_pruebas') {
+        inProgressItems++;
+      } else {
+        pendingItems++;
+      }
+      
+      console.log(`📋 Item "${item.titulo}":`, {
+        backlogStatus: item.estado,
+        taskStatus: relatedTask?.status,
+        realStatus,
+        hasTask: !!relatedTask
+      });
+    }
+    
+    const progressPercentage = totalItems > 0 ? Math.round((completedItems / totalItems) * 100) : 0;
+    
+    const result = {
+      total: totalItems,
+      completed: completedItems,
+      inProgress: inProgressItems,
+      pending: pendingItems,
+      percentage: progressPercentage
+    };
+    
+    console.log('✅ Progreso calculado:', result);
+    
+    res.json({
+      success: true,
+      data: result
+    });
+    
+  } catch (error) {
+    console.error('Error calculando progreso de items técnicos:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error al calcular progreso de items técnicos', 
       error: error.message 
     });
   }
@@ -453,69 +460,13 @@ router.get('/backlog/sprint/:sprintId/hierarchical', authenticate, async (req, r
   try {
     const { sprintId } = req.params;
     
-    console.log('=== OBTENIENDO VISTA JERÁRQUICA DEL SPRINT ===');
-    console.log('Sprint ID:', sprintId);
-    console.log('User role:', req.user?.role);
+    const result = await BacklogService.getSprintBacklogHierarchical(sprintId);
     
-    // Obtener todas las historias del sprint
-    const historias = await BacklogItem.find({
-      sprint: sprintId,
-      tipo: 'historia'
-    }).populate([
-      { path: 'producto', select: 'nombre' },
-      { path: 'asignado_a', select: 'nombre_negocio email' },
-      { path: 'sprint', select: 'nombre' }
-    ]).sort({ orden: 1 });
+    if (!result.success) {
+      return res.status(400).json({ message: result.error });
+    }
     
-    // Obtener todos los items técnicos del sprint
-    const itemsTecnicos = await BacklogItem.find({
-      sprint: sprintId,
-      tipo: { $in: ['tarea', 'bug', 'mejora'] }
-    }).populate([
-      { path: 'producto', select: 'nombre' },
-      { path: 'asignado_a', select: 'nombre_negocio email' },
-      { path: 'sprint', select: 'nombre' },
-      { path: 'historia_padre', select: 'titulo tipo' }
-    ]).sort({ orden: 1 });
-    
-    // Agrupar items técnicos por historia padre
-    const itemsAsignados = {};
-    const itemsSinAsignar = [];
-    
-    itemsTecnicos.forEach(item => {
-      if (item.historia_padre) {
-        const historiaId = item.historia_padre._id.toString();
-        if (!itemsAsignados[historiaId]) {
-          itemsAsignados[historiaId] = [];
-        }
-        itemsAsignados[historiaId].push(item);
-      } else {
-        itemsSinAsignar.push(item);
-      }
-    });
-    
-    // Construir respuesta jerárquica
-    const historiasConItems = historias.map(historia => ({
-      historia,
-      items_tecnicos: itemsAsignados[historia._id.toString()] || []
-    }));
-    
-    console.log('✅ Vista jerárquica generada');
-    console.log('- Historias:', historias.length);
-    console.log('- Items técnicos asignados:', itemsTecnicos.length - itemsSinAsignar.length);
-    console.log('- Items sin asignar:', itemsSinAsignar.length);
-    
-    res.json({
-      historias: historiasConItems,
-      items_sin_asignar: itemsSinAsignar,
-      resumen: {
-        total_historias: historias.length,
-        total_items_tecnicos: itemsTecnicos.length,
-        items_asignados: itemsTecnicos.length - itemsSinAsignar.length,
-        items_sin_asignar: itemsSinAsignar.length
-      }
-    });
-    
+    res.json(result);
   } catch (error) {
     console.error('Error obteniendo vista jerárquica:', error);
     res.status(500).json({ 

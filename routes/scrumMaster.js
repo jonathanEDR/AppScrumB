@@ -6,6 +6,8 @@ const Sprint = require('../models/Sprint');
 const BacklogItem = require('../models/BacklogItem');
 const TeamMember = require('../models/TeamMember');
 const Product = require('../models/Product');
+const BugReport = require('../models/BugReport');
+const Comment = require('../models/Comment');
 const logger = require('../config/logger');
 
 // Middleware para verificar rol de Scrum Master
@@ -83,8 +85,8 @@ router.get('/dashboard', authenticate, requireScrumMaster, async (req, res) => {
       })
         .populate('producto', 'nombre')
         .populate('asignado_a', 'nombre_negocio email firstName lastName')
-        .populate('historia_relacionada', 'titulo')
-        .select('titulo descripcion tipo estado prioridad asignado_a producto historia_relacionada estimacion_horas')
+        .populate('historia_padre', 'titulo')
+        .select('titulo descripcion tipo estado prioridad asignado_a producto historia_padre')
         .sort({ prioridad: 1, tipo: 1 })
         .limit(100)
         .lean(),
@@ -467,6 +469,377 @@ router.get('/sprint/:sprintId/metrics', authenticate, requireScrumMaster, async 
     
     res.status(500).json({
       error: 'Error al obtener métricas del sprint',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * ============================================================================
+ * ENDPOINT PARA GESTIÓN DE BUG REPORTS - SCRUM MASTER
+ * ============================================================================
+ * 
+ * Este endpoint permite al Scrum Master visualizar todos los bug reports
+ * del proyecto/equipo para poder tener visibilidad completa.
+ * 
+ * GET /api/scrum-master/bugs
+ * 
+ * Query parameters:
+ * - status: filtrar por estado (open, in_progress, resolved, closed, rejected)
+ * - priority: filtrar por prioridad (low, medium, high, critical)
+ * - severity: filtrar por severidad (minor, major, critical, blocker)
+ * - assignedTo: filtrar por usuario asignado
+ * - reportedBy: filtrar por quien reportó
+ * - project: filtrar por proyecto
+ * - page: página (default: 1)
+ * - limit: límite por página (default: 20)
+ * ============================================================================
+ */
+router.get('/bugs', authenticate, requireScrumMaster, async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    logger.info('Scrum Master Bug Reports - Iniciando consulta', {
+      context: 'ScrumMasterBugs',
+      userId: req.user.id,
+      userRole: req.user.role,
+      query: req.query
+    });
+
+    const {
+      status,
+      priority,
+      severity,
+      assignedTo,
+      reportedBy,
+      project,
+      search,
+      page = 1,
+      limit = 20
+    } = req.query;
+
+    // Construir filtros
+    const filters = {};
+    
+    if (status && status !== 'all') {
+      filters.status = status;
+    }
+    
+    if (priority && priority !== 'all') {
+      filters.priority = priority;
+    }
+    
+    if (severity && severity !== 'all') {
+      filters.severity = severity;
+    }
+    
+    if (assignedTo && assignedTo !== 'all') {
+      filters.assignedTo = assignedTo;
+    }
+    
+    if (reportedBy && reportedBy !== 'all') {
+      filters.reportedBy = reportedBy;
+    }
+    
+    if (project && project !== 'all') {
+      filters.project = project;
+    }
+
+    // Filtro de búsqueda por texto
+    if (search) {
+      filters.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Paginación
+    const pageNumber = Math.max(1, parseInt(page));
+    const limitNumber = Math.min(100, Math.max(1, parseInt(limit)));
+    const skip = (pageNumber - 1) * limitNumber;
+
+    logger.info('Filtros aplicados para bug reports', {
+      context: 'ScrumMasterBugs',
+      filters,
+      pagination: { page: pageNumber, limit: limitNumber, skip }
+    });
+
+    // Consulta principal con populate
+    const bugsPromise = BugReport.find(filters)
+      .populate('reportedBy', 'firstName lastName email role nombre_negocio')
+      .populate('assignedTo', 'firstName lastName email role nombre_negocio')
+      .populate('project', 'nombre descripcion')
+      .populate('sprint', 'nombre fecha_inicio fecha_fin estado')
+      .populate('relatedTasks', 'titulo title status priority')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNumber)
+      .lean();
+
+    // Contar total para paginación
+    const totalPromise = BugReport.countDocuments(filters);
+
+    // Ejecutar consultas en paralelo
+    const [bugs, totalBugs] = await Promise.all([bugsPromise, totalPromise]);
+
+    // Calcular estadísticas rápidas
+    const statsPromise = BugReport.aggregate([
+      { $match: project ? { project } : {} },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          open: { $sum: { $cond: [{ $eq: ['$status', 'open'] }, 1, 0] } },
+          inProgress: { $sum: { $cond: [{ $eq: ['$status', 'in_progress'] }, 1, 0] } },
+          resolved: { $sum: { $cond: [{ $eq: ['$status', 'resolved'] }, 1, 0] } },
+          critical: { $sum: { $cond: [{ $eq: ['$priority', 'critical'] }, 1, 0] } },
+          high: { $sum: { $cond: [{ $eq: ['$priority', 'high'] }, 1, 0] } },
+          blockers: { $sum: { $cond: [{ $eq: ['$severity', 'blocker'] }, 1, 0] } }
+        }
+      }
+    ]);
+
+    const [stats] = await statsPromise;
+
+    const finalStats = stats || {
+      total: 0,
+      open: 0,
+      inProgress: 0,
+      resolved: 0,
+      critical: 0,
+      high: 0,
+      blockers: 0
+    };
+
+    // Calcular información de paginación
+    const totalPages = Math.ceil(totalBugs / limitNumber);
+    const hasNextPage = pageNumber < totalPages;
+    const hasPreviousPage = pageNumber > 1;
+
+    const queryTime = Date.now() - startTime;
+
+    logger.info('Bug reports obtenidos exitosamente', {
+      context: 'ScrumMasterBugs',
+      count: bugs.length,
+      totalBugs,
+      queryTime: `${queryTime}ms`,
+      stats: finalStats
+    });
+
+    res.json({
+      success: true,
+      data: {
+        bugs,
+        pagination: {
+          currentPage: pageNumber,
+          totalPages,
+          totalBugs,
+          limit: limitNumber,
+          hasNextPage,
+          hasPreviousPage
+        },
+        stats: finalStats
+      },
+      meta: {
+        queryTime: `${queryTime}ms`,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    const queryTime = Date.now() - startTime;
+    
+    logger.error('Error al obtener bug reports para Scrum Master', {
+      context: 'ScrumMasterBugs',
+      error: error.message,
+      stack: error.stack,
+      userId: req.user?.id,
+      queryTime: `${queryTime}ms`
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor al obtener bug reports',
+      message: error.message,
+      meta: {
+        queryTime: `${queryTime}ms`,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
+
+/**
+ * ============================================================================
+ * ENDPOINT PARA OBTENER DETALLE DE BUG REPORT - SCRUM MASTER
+ * ============================================================================
+ * 
+ * GET /api/scrum-master/bugs/:id
+ * 
+ * Permite al Scrum Master obtener el detalle completo de un bug report
+ * ============================================================================
+ */
+router.get('/bugs/:id', authenticate, requireScrumMaster, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const bugReport = await BugReport.findById(id)
+      .populate('reportedBy', 'firstName lastName email role nombre_negocio')
+      .populate('assignedTo', 'firstName lastName email role nombre_negocio')
+      .populate('project', 'nombre descripcion')
+      .populate('sprint', 'nombre fecha_inicio fecha_fin estado')
+      .populate('relatedTasks', 'titulo title status priority')
+      .lean();
+
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    logger.info('Bug report obtenido por Scrum Master', {
+      context: 'ScrumMasterBugs',
+      bugId: id,
+      userId: req.user.id
+    });
+
+    res.json({
+      success: true,
+      data: bugReport
+    });
+  } catch (error) {
+    logger.error('Error al obtener bug report para Scrum Master', {
+      context: 'ScrumMasterBugs',
+      error: error.message,
+      bugId: req.params.id,
+      userId: req.user?.id
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * ============================================================================
+ * ENDPOINT PARA OBTENER COMENTARIOS DE BUG REPORT - SCRUM MASTER
+ * ============================================================================
+ * 
+ * GET /api/scrum-master/bugs/:id/comments
+ * 
+ * Permite al Scrum Master ver todos los comentarios de un bug report
+ * ============================================================================
+ */
+router.get('/bugs/:id/comments', authenticate, requireScrumMaster, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await Comment.getCommentThread('BugReport', id, {
+      populate: [
+        { path: 'author', select: 'firstName lastName email role nombre_negocio' },
+        { path: 'replies.author', select: 'firstName lastName email role nombre_negocio' }
+      ]
+    });
+
+    res.json({
+      success: true,
+      data: result.comments,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    logger.error('Error al obtener comentarios de bug report', {
+      context: 'ScrumMasterBugs',
+      error: error.message,
+      bugId: req.params.id,
+      userId: req.user?.id
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Error al obtener comentarios',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * ============================================================================
+ * ENDPOINT PARA AGREGAR COMENTARIOS A BUG REPORT - SCRUM MASTER
+ * ============================================================================
+ * 
+ * POST /api/scrum-master/bugs/:id/comments
+ * 
+ * Permite al Scrum Master agregar comentarios a un bug report
+ * ============================================================================
+ */
+router.post('/bugs/:id/comments', authenticate, requireScrumMaster, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text, content, parentComment } = req.body;
+    
+    // Usar text o content (compatibilidad)
+    const commentContent = text || content;
+
+    if (!commentContent || !commentContent.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'El contenido del comentario es requerido'
+      });
+    }
+
+    // Verificar que el bug report existe
+    const bugReport = await BugReport.findById(id);
+    if (!bugReport) {
+      return res.status(404).json({
+        success: false,
+        error: 'Bug report no encontrado'
+      });
+    }
+
+    const comment = new Comment({
+      resourceType: 'BugReport',
+      resourceId: id,
+      author: req.user.id,
+      content: commentContent.trim(),
+      parentComment: parentComment || null,
+      metadata: {
+        userRole: 'scrum_master',
+        source: 'scrum_master_dashboard'
+      }
+    });
+
+    await comment.save();
+    
+    // Populate para la respuesta
+    await comment.populate('author', 'firstName lastName email role nombre_negocio');
+
+    logger.info('Comentario agregado por Scrum Master', {
+      context: 'ScrumMasterBugs',
+      bugId: id,
+      commentId: comment._id,
+      userId: req.user.id
+    });
+
+    res.status(201).json({
+      success: true,
+      data: comment,
+      message: 'Comentario agregado correctamente'
+    });
+  } catch (error) {
+    logger.error('Error al agregar comentario como Scrum Master', {
+      context: 'ScrumMasterBugs',
+      error: error.message,
+      bugId: req.params.id,
+      userId: req.user?.id
+    });
+
+    res.status(500).json({
+      success: false,
+      error: 'Error al agregar comentario',
       message: error.message
     });
   }

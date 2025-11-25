@@ -50,10 +50,7 @@ router.get('/members', authenticate, async (req, res) => {
     
     // Si no hay miembros del equipo, crear datos de demostración basados en usuarios existentes
     if (teamMembers.length === 0) {
-      console.log('No se encontraron TeamMembers, generando datos demo basados en Users...');
-      
       const users = await User.find({ is_active: true }).limit(10);
-      console.log(`Encontrados ${users.length} usuarios activos para generar datos demo`);
       
       const roles = ['developer', 'tester', 'designer', 'scrum_master', 'product_owner'];
       
@@ -98,7 +95,7 @@ router.get('/members', authenticate, async (req, res) => {
         };
       });
       
-      console.log(`Generados ${teamMembers.length} miembros demo del equipo`);
+      // Nota: Estos son datos demo. En producción deberías tener TeamMembers reales
     }
     
     // Enriquecer datos con información calculada

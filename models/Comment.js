@@ -147,11 +147,11 @@ commentSchema.statics.getCommentThread = async function(resourceType, resourceId
     parentComment: null, // Solo comentarios de nivel superior
     isDeleted: false
   })
-    .populate('author', 'name email avatar role')
+    .populate('author', 'nombre_negocio email role firstName lastName')
     .populate({
       path: 'parentComment',
       select: 'author content createdAt',
-      populate: { path: 'author', select: 'name' }
+      populate: { path: 'author', select: 'nombre_negocio firstName lastName' }
     })
     .sort(sortBy)
     .skip(skip)
@@ -164,7 +164,7 @@ commentSchema.statics.getCommentThread = async function(resourceType, resourceId
       parentComment: comment._id,
       isDeleted: false
     })
-      .populate('author', 'name email avatar role')
+      .populate('author', 'nombre_negocio email role firstName lastName')
       .sort('createdAt')
       .lean();
     
