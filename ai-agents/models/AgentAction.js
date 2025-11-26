@@ -114,7 +114,7 @@ const AgentActionSchema = new mongoose.Schema({
       default: 'success'
     },
     items_affected: [{
-      collection: {
+      target_collection: {
         type: String,
         description: 'Colección afectada (BacklogItem, Sprint, etc.)'
       },

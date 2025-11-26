@@ -6,6 +6,19 @@ const TeamMember = require('../models/TeamMember');
 const Task = require('../models/Task');
 const User = require('../models/User');
 
+/**
+ * Team Management Routes
+ * 
+ * Endpoints para la gestión de equipos y miembros del equipo.
+ * Incluye funcionalidades para:
+ * - Obtener miembros del equipo con creación automática desde Users
+ * - Generar resúmenes de tareas por miembro
+ * - Obtener tareas específicas de usuarios
+ * - CRUD de TeamMembers
+ * 
+ * Roles soportados: scrum_master, product_owner, developers, tester, designer, analyst, super_admin
+ */
+
 // GET /api/team - Obtener todos los miembros del equipo
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -48,81 +61,97 @@ router.get('/members', authenticate, async (req, res) => {
       .populate('currentSprint', 'name startDate endDate status')
       .sort({ role: 1, 'user.firstName': 1 });
     
-    // Si no hay miembros del equipo, crear datos de demostración basados en usuarios existentes
-    if (teamMembers.length === 0) {
-      const users = await User.find({ is_active: true }).limit(10);
+    // Verificar si hay usuarios sin TeamMember y crearlos automáticamente
+    const users = await User.find({ is_active: true });
+    
+    // Crear TeamMembers automáticamente para usuarios que no tengan uno
+    const createdMembers = [];
+    
+    for (const user of users) {
+      // Verificar si ya existe un TeamMember para este usuario
+      const existingMember = await TeamMember.findOne({ user: user._id });
       
-      const roles = ['developer', 'tester', 'designer', 'scrum_master', 'product_owner'];
-      
-      teamMembers = users.map((user, index) => {
-        const selectedRole = user.role === 'user' ? roles[index % roles.length] : user.role;
+      if (!existingMember) {
+        // Determinar el rol basado en el rol del usuario
+        let memberRole = user.role;
         
-        return {
-          _id: new mongoose.Types.ObjectId(),
-          user: {
-            _id: user._id,
-            firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
-            lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
-            email: user.email,
-            avatar: null,
-            nombre_negocio: user.nombre_negocio
-          },
+        // Mapear roles que no existen en TeamMember enum
+        const roleMapping = {
+          'user': 'developers',
+          'developer': 'developers' // Por si acaso hay inconsistencias
+        };
+        
+        // Verificar si el rol necesita mapeo
+        if (roleMapping[user.role]) {
+          memberRole = roleMapping[user.role];
+        }
+        
+        // Lista de roles válidos en TeamMember
+        const validRoles = ['scrum_master', 'product_owner', 'developers', 'tester', 'designer', 'analyst', 'super_admin'];
+        
+        // Si el rol no está en la lista válida, usar 'developers' por defecto
+        if (!validRoles.includes(memberRole)) {
+          memberRole = 'developers';
+        }
+        
+        const newTeamMember = new TeamMember({
+          user: user._id,
           team: 'default',
-          role: selectedRole,
+          role: memberRole,
           status: user.is_active ? 'active' : 'inactive',
-          availability: Math.floor(Math.random() * 40) + 60, // 60-100%
+          position: 'Miembro del equipo',
           skills: [
             { name: 'JavaScript', level: 'intermediate' },
-            { name: 'React', level: 'advanced' },
-            { name: selectedRole === 'developer' ? 'Node.js' : 'Testing', level: 'intermediate' }
-          ],
-          workload: {
-            currentStoryPoints: Math.floor(Math.random() * 15) + 5, // 5-20 puntos
-            maxStoryPoints: 24,
-            hoursWorked: Math.floor(Math.random() * 25) + 15, // 15-40 horas
-            maxHours: 40
-          },
-          performance: {
-            velocityAverage: Math.floor(Math.random() * 10) + 15, // 15-25
-            completionRate: Math.floor(Math.random() * 30) + 70, // 70-100%
-            qualityScore: Math.floor(Math.random() * 20) + 80 // 80-100%
-          },
-          currentSprint: null,
-          joinedDate: new Date(Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000), // Último año
-          lastActiveDate: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000), // Última semana
-          createdAt: new Date(),
-          updatedAt: new Date()
-        };
-      });
-      
-      // Nota: Estos son datos demo. En producción deberías tener TeamMembers reales
+            { name: 'React', level: 'intermediate' }
+          ], // Skills en formato correcto
+          availability: 80,
+          joinedDate: user.createdAt || new Date(),
+          lastActiveDate: new Date()
+        });
+        
+        const savedMember = await newTeamMember.save();
+        const populatedMember = await TeamMember.findById(savedMember._id)
+          .populate('user', 'firstName lastName email avatar nombre_negocio')
+          .populate('currentSprint', 'name startDate endDate status');
+        
+        createdMembers.push(populatedMember);
+      }
     }
     
-    // Enriquecer datos con información calculada
-    const enrichedMembers = teamMembers.map(member => {
-      const workloadPercentage = member.workload?.maxStoryPoints > 0 
-        ? Math.round((member.workload.currentStoryPoints / member.workload.maxStoryPoints) * 100)
-        : 0;
-      
+    // Recargar todos los TeamMembers después de crear los nuevos
+    teamMembers = await TeamMember.find(filters)
+      .populate('user', 'firstName lastName email avatar nombre_negocio')
+      .populate('currentSprint', 'name startDate endDate status')
+      .sort({ role: 1, 'user.firstName': 1 });
+    
+    // Procesar datos para el frontend
+    const processedMembers = teamMembers.map(member => {
       return {
-        ...member.toObject ? member.toObject() : member,
-        workloadPercentage,
-        capacityRemaining: Math.max(0, (member.workload?.maxStoryPoints || 24) - (member.workload?.currentStoryPoints || 0)),
-        isOverloaded: workloadPercentage > 100
+        _id: member._id,
+        user: member.user,
+        team: member.team,
+        role: member.role,
+        status: member.status,
+        position: member.position,
+        skills: member.skills || [],
+        availability: member.availability || 80,
+        joinedDate: member.joinedDate,
+        lastActiveDate: member.lastActiveDate,
+        createdAt: member.createdAt,
+        updatedAt: member.updatedAt
       };
     });
     
     res.json({
-      members: enrichedMembers,
-      total: enrichedMembers.length,
+      members: processedMembers,
+      total: processedMembers.length,
       summary: {
-        active: enrichedMembers.filter(m => m.status === 'active').length,
-        busy: enrichedMembers.filter(m => m.status === 'busy').length,
-        inactive: enrichedMembers.filter(m => m.status === 'inactive').length,
-        overloaded: enrichedMembers.filter(m => m.isOverloaded).length,
-        averageWorkload: enrichedMembers.length > 0 
-          ? Math.round(enrichedMembers.reduce((sum, m) => sum + (m.workloadPercentage || 0), 0) / enrichedMembers.length)
-          : 0
+        active: processedMembers.filter(m => m.status === 'active').length,
+        inactive: processedMembers.filter(m => m.status === 'inactive').length,
+        byRole: processedMembers.reduce((acc, m) => {
+          acc[m.role] = (acc[m.role] || 0) + 1;
+          return acc;
+        }, {})
       }
     });
   } catch (error) {
@@ -131,27 +160,85 @@ router.get('/members', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/team/:id - Obtener miembro específico del equipo
-router.get('/:id', authenticate, async (req, res) => {
+// GET /api/team/tasks-summary - Obtener resumen de tareas de todos los miembros del equipo
+router.get('/tasks-summary', authenticate, async (req, res) => {
   try {
-    const { id } = req.params;
-    const teamMember = await TeamMember.findById(id)
-      .populate('user', 'firstName lastName email avatar')
-      .populate('currentSprint', 'name startDate endDate status');
+    // Primero, verificar todos los miembros sin filtro
+    const allMembers = await TeamMember.find({})
+      .populate('user', 'firstName lastName email nombre_negocio');
     
-    if (!teamMember) {
-      return res.status(404).json({ error: 'Miembro del equipo no encontrado' });
-    }
+    // Ahora buscar solo los activos
+    const teamMembers = await TeamMember.find({ status: 'active' })
+      .populate('user', 'firstName lastName email nombre_negocio');
     
-    res.json(teamMember);
+    // Si no hay miembros activos, usar todos los miembros
+    const membersToUse = teamMembers.length > 0 ? teamMembers : allMembers;
+    
+    const tasksSummary = await Promise.all(
+      membersToUse.map(async (member) => {
+        try {
+          // Buscar tareas por usuario (assignee referencia a User, no a TeamMember)
+          const userId = member.user._id;
+          
+          const totalTasks = await Task.countDocuments({ assignee: userId });
+          const completedTasks = await Task.countDocuments({ assignee: userId, status: 'done' });
+          const inProgressTasks = await Task.countDocuments({ assignee: userId, status: 'in_progress' });
+          const pendingTasks = await Task.countDocuments({ 
+            assignee: userId, 
+            status: { $in: ['todo', 'pending'] } 
+          });
+          
+          return {
+            userId: member.user.email, // Usar email como identificador
+            teamMemberId: member._id, // ID del TeamMember
+            userInfo: {
+              _id: member.user._id,
+              firstName: member.user.firstName,
+              lastName: member.user.lastName,
+              email: member.user.email,
+              nombre_negocio: member.user.nombre_negocio,
+              role: member.role
+            },
+            totalTasks,
+            completedTasks,
+            inProgressTasks,
+            pendingTasks,
+            progressPercentage: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0
+          };
+        } catch (memberError) {
+          console.error(`Error procesando miembro ${member.user.email}:`, memberError);
+          return {
+            userId: member.user.email,
+            teamMemberId: member._id,
+            userInfo: {
+              _id: member.user._id,
+              firstName: member.user.firstName,
+              lastName: member.user.lastName,
+              email: member.user.email,
+              nombre_negocio: member.user.nombre_negocio,
+              role: member.role
+            },
+            totalTasks: 0,
+            completedTasks: 0,
+            inProgressTasks: 0,
+            pendingTasks: 0,
+            progressPercentage: 0
+          };
+        }
+      })
+    );
+    
+    res.json({
+      teamTasksSummary: tasksSummary
+    });
   } catch (error) {
-    console.error('Error al obtener miembro del equipo:', error);
-    if (error.name === 'CastError') {
-      return res.status(400).json({ error: 'ID de miembro inválido' });
-    }
+    console.error('Error al obtener resumen de tareas del equipo:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
+
+// GET /api/team/:id - Obtener miembro específico del equipo (DEBE IR AL FINAL)
+// Esta ruta se movió al final del archivo para evitar conflictos con rutas específicas
 
 // POST /api/team - Crear nuevo miembro del equipo
 router.post('/', authenticate, async (req, res) => {
@@ -438,6 +525,200 @@ router.get('/stats/:teamName', authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error('Error al obtener estadísticas del equipo:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// GET /api/team/members/:userId/tasks - Obtener tareas de un usuario específico
+router.get('/members/:userId/tasks', authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status, priority, sprintId } = req.query;
+    
+    // Buscar usuario directamente
+    let user;
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      user = await User.findById(userId);
+    } else {
+      user = await User.findOne({ email: userId });
+    }
+    
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    
+    // Construir filtros para las tareas
+    const taskFilters = { assignee: user._id };
+    if (status) taskFilters.status = status;
+    if (priority) taskFilters.priority = priority;
+    if (sprintId) taskFilters.sprint = sprintId;
+    
+    // Buscar tareas del usuario
+    const tasks = await Task.find(taskFilters)
+      .populate('sprint', 'name startDate endDate status')
+      .populate('assignee', 'firstName lastName email avatar nombre_negocio')
+      .populate('backlogItem', 'title priority')
+      .sort({ updatedAt: -1 });
+    
+    if (tasks.length === 0) {
+      
+      // Crear algunas tareas demo para el usuario
+      const demoTasks = [
+        {
+          _id: new mongoose.Types.ObjectId(),
+          title: `Implementar componente de login`,
+          description: 'Desarrollar el componente de autenticación de usuarios',
+          status: 'in_progress',
+          priority: 'high',
+          estimatedHours: 8,
+          actualHours: 5,
+          assignee: {
+            _id: user._id,
+            firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
+            lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
+            email: user.email,
+            avatar: null,
+            nombre_negocio: user.nombre_negocio
+          },
+          type: 'feature',
+          storyPoints: 5,
+          tags: ['frontend', 'auth'],
+          progress: 62,
+          sprint: null,
+          product: null,
+          createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+          updatedAt: new Date()
+        },
+        {
+          _id: new mongoose.Types.ObjectId(),
+          title: `Configurar base de datos`,
+          description: 'Establecer conexión y configuración inicial de la base de datos',
+          status: 'completed',
+          priority: 'medium',
+          estimatedHours: 4,
+          actualHours: 4,
+          assignee: {
+            _id: user._id,
+            firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
+            lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
+            email: user.email,
+            avatar: null,
+            nombre_negocio: user.nombre_negocio
+          },
+          type: 'technical',
+          storyPoints: 3,
+          tags: ['backend', 'database'],
+          progress: 100,
+          sprint: null,
+          product: null,
+          createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
+          updatedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000)
+        },
+        {
+          _id: new mongoose.Types.ObjectId(),
+          title: `Diseñar interfaz de usuario`,
+          description: 'Crear mockups y diseño de la interfaz principal',
+          status: 'todo',
+          priority: 'medium',
+          estimatedHours: 6,
+          actualHours: 0,
+          assignee: {
+            _id: user._id,
+            firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
+            lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
+            email: user.email,
+            avatar: null,
+            nombre_negocio: user.nombre_negocio
+          },
+          type: 'design',
+          storyPoints: 4,
+          tags: ['design', 'ui/ux'],
+          progress: 0,
+          sprint: null,
+          product: null,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        }
+      ];
+      
+      // Aplicar filtros a las tareas demo
+      let filteredTasks = demoTasks;
+      if (status) {
+        filteredTasks = demoTasks.filter(task => task.status === status);
+      }
+      if (priority) {
+        filteredTasks = filteredTasks.filter(task => task.priority === priority);
+      }
+      
+      return res.json({
+        tasks: filteredTasks,
+        total: filteredTasks.length,
+        completed: filteredTasks.filter(t => t.status === 'completed').length,
+        inProgress: filteredTasks.filter(t => t.status === 'in_progress').length,
+        pending: filteredTasks.filter(t => ['todo', 'pending'].includes(t.status)).length,
+        userInfo: {
+          _id: user._id,
+          firstName: user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario',
+          lastName: user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') || 'Demo' : 'Demo',
+          email: user.email,
+          nombre_negocio: user.nombre_negocio,
+          role: user.role || 'developer'
+        }
+      });
+    }
+    
+    // Procesar tareas reales encontradas
+    const processedTasks = tasks.map(task => {
+      const progress = task.estimatedHours > 0 
+        ? Math.round((task.actualHours / task.estimatedHours) * 100)
+        : 0;
+      
+      return {
+        ...task.toObject(),
+        progress
+      };
+    });
+    
+    res.json({
+      tasks: processedTasks,
+      total: processedTasks.length,
+      completed: processedTasks.filter(t => t.status === 'completed').length,
+      inProgress: processedTasks.filter(t => t.status === 'in_progress').length,
+      pending: processedTasks.filter(t => ['todo', 'pending'].includes(t.status)).length,
+      userInfo: {
+        _id: user._id,
+        firstName: user.firstName || (user.nombre_negocio ? user.nombre_negocio.split(' ')[0] : 'Usuario'),
+        lastName: user.lastName || (user.nombre_negocio ? user.nombre_negocio.split(' ').slice(1).join(' ') : 'Demo'),
+        email: user.email,
+        nombre_negocio: user.nombre_negocio,
+        role: user.role || 'developer'
+      }
+    });
+  } catch (error) {
+    console.error('Error al obtener tareas del usuario:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+// GET /api/team/:id - Obtener miembro específico del equipo
+// IMPORTANTE: Esta ruta va al final para evitar conflictos con rutas más específicas
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const teamMember = await TeamMember.findById(id)
+      .populate('user', 'firstName lastName email avatar')
+      .populate('currentSprint', 'name startDate endDate status');
+    
+    if (!teamMember) {
+      return res.status(404).json({ error: 'Miembro del equipo no encontrado' });
+    }
+    
+    res.json(teamMember);
+  } catch (error) {
+    console.error('Error al obtener miembro del equipo:', error);
+    if (error.name === 'CastError') {
+      return res.status(400).json({ error: 'ID de miembro inválido' });
+    }
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

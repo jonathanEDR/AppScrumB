@@ -249,7 +249,7 @@ const AgentSchema = new mongoose.Schema({
 });
 
 // Índices para optimización
-AgentSchema.index({ name: 1 });
+// Note: name field already has unique index, so no need to add separate index
 AgentSchema.index({ type: 1 });
 AgentSchema.index({ status: 1 });
 AgentSchema.index({ 'limitations.allowed_roles': 1 });

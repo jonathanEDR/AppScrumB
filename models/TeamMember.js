@@ -13,7 +13,7 @@ const teamMemberSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['scrum_master', 'product_owner', 'developer', 'tester', 'designer', 'analyst'],
+    enum: ['scrum_master', 'product_owner', 'developers', 'tester', 'designer', 'analyst', 'super_admin'],
     required: true
   },
   status: {

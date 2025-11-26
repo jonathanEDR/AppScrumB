@@ -167,7 +167,7 @@ const AgentSessionSchema = new mongoose.Schema({
 });
 
 // Índices
-AgentSessionSchema.index({ session_id: 1 });
+// Note: session_id field already has unique index, so no need to add separate index
 AgentSessionSchema.index({ agent_id: 1, user_id: 1 });
 AgentSessionSchema.index({ user_id: 1, status: 1 });
 AgentSessionSchema.index({ expires_at: 1 }); // Para cleanup automático
