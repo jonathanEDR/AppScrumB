@@ -111,7 +111,8 @@ class OrchestratorService {
 
       const executionTime = Date.now() - startTime;
 
-      return {
+      // Construir respuesta base
+      const response = {
         status: 'success',
         intent: classification.intent,
         confidence: classification.confidence,
@@ -128,6 +129,19 @@ class OrchestratorService {
           execution_time_ms: executionTime
         }
       };
+
+      // 🔧 Si result.data tiene 'response', propagarlo al nivel superior
+      if (result.data?.response) {
+        response.response = result.data.response;
+      }
+
+      // 🔧 Si result.data tiene 'needs_more_context', propagarlo
+      if (result.data?.needs_more_context) {
+        response.needs_more_context = result.data.needs_more_context;
+        response.missing_data = result.data.missing_data;
+      }
+
+      return response;
 
     } catch (error) {
       console.error('OrchestratorService.execute error:', error);
@@ -491,13 +505,48 @@ class OrchestratorService {
   static async executeRealAgent(agent, intent, context, entities, userId) {
     console.log(`\n🤖 Ejecutando agente real: ${agent.type}`);
 
-    // Cargar clase del agente según tipo
+    // UNIFIED SYSTEM: SCRUM AI maneja internamente las especialidades
+    if (agent.type === 'unified_system' || agent.is_unified_system) {
+      console.log('🎯 Sistema Unificado detectado: SCRUM AI');
+      
+      // Determinar qué especialidad usar según el intent
+      const agentType = IntentClassifier.getAgentTypeForIntent(intent);
+      console.log(`   Especialidad requerida: ${agentType}`);
+      
+      // Buscar la especialidad correspondiente
+      const specialty = agent.specialties?.find(s => s.id === agentType);
+      
+      if (!specialty) {
+        console.warn(`⚠️ Especialidad ${agentType} no encontrada, usando master prompt`);
+      } else {
+        console.log(`   ✅ Usando especialidad: ${specialty.icon} ${specialty.name}`);
+      }
+      
+      // Usar ProductOwnerAgent como base para ejecutar (funciona con cualquier especialidad)
+      const AgentClass = require('./agents/ProductOwnerAgent');
+      const agentInstance = new AgentClass(agent, userId, specialty);
+      const result = await agentInstance.execute(intent, context, entities);
+      
+      // Agregar el emoji de la especialidad a la respuesta
+      if (specialty && result.response) {
+        result.response = `${specialty.icon} ${result.response}`;
+      }
+      
+      console.log(`✅ SCRUM AI ejecutado exitosamente (especialidad: ${specialty?.name || 'master'})`);
+      return result;
+    }
+
+    // Cargar clase del agente según tipo (legacy - agentes separados)
     let AgentClass;
     
     try {
       switch (agent.type) {
         case 'product_owner':
           AgentClass = require('./agents/ProductOwnerAgent');
+          break;
+        
+        case 'architect':
+          AgentClass = require('./agents/ArchitectAgent');
           break;
         
         case 'scrum_master':

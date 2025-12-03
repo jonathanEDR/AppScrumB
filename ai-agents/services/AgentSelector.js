@@ -26,21 +26,70 @@ class AgentSelector {
       console.log('- Agent type needed:', agentType);
       console.log('- Required permissions:', requiredPermissions);
 
+      // ✅ NUEVO: Verificar si es SCRUM AI unificado
+      const User = require('../../models/User');
+      const user = await User.findById(userId);
+      const isSuperAdmin = user && user.role === 'super_admin';
+      
+      console.log('- User role:', user?.role);
+      console.log('- Is Super Admin:', isSuperAdmin);
+
       // Buscar agentes activos del tipo necesario
+      // IMPORTANTE: Ahora también busca unified_system (SCRUM AI)
       const agents = await Agent.find({
-        type: agentType,
-        status: 'active'
+        $or: [
+          { type: agentType, status: 'active' },
+          { is_unified_system: true, status: 'active' }  // SCRUM AI
+        ]
       }).lean();
 
-      console.log(`- Found ${agents.length} active agents of type ${agentType}`);
+      console.log(`- Found ${agents.length} active agents`);
 
       if (agents.length === 0) {
         console.warn(`No active agents found for type: ${agentType}`);
         return null;
       }
 
-      // Filtrar por delegaciones activas del usuario
-      for (const agent of agents) {
+      // Priorizar SCRUM AI unificado si existe
+      const scrumAI = agents.find(a => a.is_unified_system === true);
+      const agentsToCheck = scrumAI ? [scrumAI, ...agents.filter(a => !a.is_unified_system)] : agents;
+
+      // ✅ NUEVO: Si es Super Admin, bypass de delegación
+      if (isSuperAdmin && agentsToCheck.length > 0) {
+        const selectedAgent = agentsToCheck[0];
+        console.log('✅ Super Admin detected - bypassing delegation check');
+        console.log('✅ Agent selected:', selectedAgent.name);
+        
+        return {
+          agent: selectedAgent,
+          delegation: {
+            _id: 'virtual-delegation',
+            user_id: userId,
+            agent_id: selectedAgent._id,
+            delegated_permissions: requiredPermissions.map(p => ({
+              permission_key: p,
+              permission_name: p,
+              granted_at: new Date()
+            })),
+            enabled_specialties: ['product_owner', 'scrum_master', 'developer'],
+            scope: {
+              all_products: true,
+              can_create: true,
+              can_edit: true,
+              can_delete: true,
+              requires_approval: false,
+              max_actions_per_hour: 1000,
+              max_actions_per_day: 10000,
+              max_cost_per_day: 100
+            },
+            status: 'active',
+            is_virtual: true
+          }
+        };
+      }
+
+      // Flujo normal para usuarios regulares
+      for (const agent of agentsToCheck) {
         const delegation = await AgentDelegation.getActiveDelegation(userId, agent._id);
         
         if (delegation) {
@@ -93,7 +142,13 @@ class AgentSelector {
         'analyze_business_value': 'analyze_business_value',
         'generate_acceptance_criteria': 'generate_acceptance_criteria',
         'suggest_improvements': 'suggest_improvements',
-        'generate_report': 'generate_reports'
+        'generate_report': 'generate_reports',
+        // Architecture capabilities
+        'define_architecture': 'define_architecture',
+        'analyze_architecture': 'analyze_architecture',
+        'suggest_tech_stack': 'suggest_tech_stack',
+        'plan_modules': 'plan_modules',
+        'link_architecture': 'link_architecture'
       };
 
       const requiredCapability = intentToCapability[intent];

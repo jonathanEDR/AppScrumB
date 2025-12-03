@@ -18,9 +18,10 @@ const ProductService = require('../../../services/ProductService');
 const SprintService = require('../../../services/SprintService');
 
 class ProductOwnerAgent {
-  constructor(agent, userId) {
+  constructor(agent, userId, specialty = null) {
     this.agent = agent;
     this.userId = userId;
+    this.specialty = specialty; // Para sistema unificado SCRUM AI
     
     // Inicializar OpenAI
     this.openai = new OpenAI({
@@ -28,9 +29,20 @@ class ProductOwnerAgent {
     });
 
     // Configuración del modelo
-    this.model = agent.config?.model || 'gpt-4-turbo-preview';
-    this.temperature = agent.config?.temperature || 0.7;
-    this.maxTokens = agent.config?.max_tokens || 2000;
+    this.model = agent.config?.model || agent.configuration?.model || 'gpt-4-turbo-preview';
+    this.temperature = agent.config?.temperature || agent.configuration?.temperature || 0.7;
+    
+    // Max tokens: asegurar que no exceda 4096 para gpt-4-turbo
+    const configMaxTokens = agent.config?.max_tokens || agent.configuration?.max_tokens || 2000;
+    this.maxTokens = Math.min(configMaxTokens, 4096);
+    
+    // System prompt: usar specialty prompt si está disponible, sino el del agente
+    this.systemPrompt = specialty?.system_prompt || agent.system_prompt || agent.master_prompt;
+    
+    console.log(`🎯 ProductOwnerAgent inicializado`);
+    console.log(`   Modelo: ${this.model}`);
+    console.log(`   Max tokens: ${this.maxTokens} (config: ${configMaxTokens})`);
+    console.log(`   Especialidad: ${specialty ? `${specialty.icon} ${specialty.name}` : 'Ninguna (agente legacy)'}`);
   }
 
   /**
@@ -40,6 +52,22 @@ class ProductOwnerAgent {
     console.log(`\n🤖 ProductOwnerAgent.execute()`);
     console.log(`Intent: ${intent}`);
     console.log(`Entities:`, entities);
+
+    // 💬 PREGUNTA GENERAL: Responder conversacionalmente sin ejecutar acción
+    if (intent === 'general_question' || intent === 'clarification_needed') {
+      console.log('💬 Pregunta general - modo conversacional');
+      return await this.answerGeneralQuestion(context, entities);
+    }
+
+    // VALIDACIÓN: ¿Tenemos suficiente contexto para ejecutar la acción?
+    const validation = this.validateContextForIntent(intent, context, entities);
+    
+    if (!validation.canExecute) {
+      console.log('⚠️ Contexto insuficiente - respondiendo conversacionalmente');
+      return await this.respondConversationally(intent, context, entities, validation.missingData);
+    }
+
+    console.log('✅ Contexto suficiente - ejecutando acción');
 
     switch (intent) {
       case 'create_user_story':
@@ -68,6 +96,254 @@ class ProductOwnerAgent {
       
       default:
         throw new Error(`Intent no soportado: ${intent}`);
+    }
+  }
+
+  /**
+   * VALIDAR CONTEXTO
+   * Determina si hay suficiente información para ejecutar una acción
+   */
+  validateContextForIntent(intent, context, entities) {
+    const result = {
+      canExecute: true,
+      missingData: []
+    };
+
+    switch (intent) {
+      case 'create_user_story':
+        // Necesitamos: product_id (o producto seleccionado) y descripción básica
+        if (!entities.product_ids?.length && !context.products?.length) {
+          result.canExecute = false;
+          result.missingData.push({
+            field: 'product',
+            message: '¿Para qué producto quieres crear la historia?'
+          });
+        }
+        
+        // Si no hay descripción en las keywords, necesitamos más info
+        if (!entities.keywords || entities.keywords.length < 3) {
+          result.canExecute = false;
+          result.missingData.push({
+            field: 'description',
+            message: '¿De qué trata la historia que quieres crear?'
+          });
+        }
+        break;
+
+      case 'refine_user_story':
+        // Necesitamos: story_id
+        if (!entities.story_ids?.length) {
+          result.canExecute = false;
+          result.missingData.push({
+            field: 'story',
+            message: '¿Qué historia quieres refinar? (ID o título)'
+          });
+        }
+        break;
+
+      case 'prioritize_backlog':
+        // Necesitamos: product_id o sprint_id
+        if (!entities.product_ids?.length && !entities.sprint_ids?.length && !context.products?.length) {
+          result.canExecute = false;
+          result.missingData.push({
+            field: 'scope',
+            message: '¿Qué backlog quieres priorizar? (producto o sprint)'
+          });
+        }
+        break;
+
+      // Otros intents pueden ejecutarse conversacionalmente
+      default:
+        result.canExecute = true;
+    }
+
+    return result;
+  }
+
+  /**
+   * RESPUESTA CONVERSACIONAL
+   * Cuando falta contexto, SCRUM AI guía naturalmente al usuario
+   */
+  async respondConversationally(intent, context, entities, missingData) {
+    console.log('💬 Generando respuesta conversacional...');
+    
+    // Construir prompt para respuesta guiada
+    const userMessage = entities.originalMessage || 'El usuario quiere realizar una acción';
+    
+    const guidancePrompt = `
+El usuario dice: "${userMessage}"
+
+Detecté que quiere: ${this.getIntentDescription(intent)}
+
+DATOS FALTANTES:
+${missingData.map(d => `- ${d.field}: ${d.message}`).join('\n')}
+
+CONTEXTO ACTUAL:
+- Productos disponibles: ${context.products?.length || 0}
+- Items en backlog: ${context.backlog_items?.length || 0}
+- Sprints activos: ${context.active_sprints?.length || 0}
+
+TU TAREA:
+1. Responde de manera natural y amigable
+2. Explica brevemente qué necesitas saber
+3. Haz preguntas específicas para cada dato faltante
+4. Ofrece opciones si hay datos disponibles (ej: "Tienes 3 productos: A, B, C")
+5. Mantén un tono profesional pero cercano
+6. NO uses formato JSON, responde en texto natural
+7. Al final, indica que cuando tengas los datos, podrás ayudar con la acción
+
+EJEMPLO DE BUENA RESPUESTA:
+"¡Perfecto! Veo que quieres crear una historia de usuario. Para ayudarte de la mejor manera, necesito saber:
+
+1. **¿Para qué producto?** - Tienes 3 productos activos: Sistema de Ventas, CRM, Portal Web
+2. **¿De qué trata la historia?** - Describe brevemente la funcionalidad que necesitas
+
+Una vez que me des estos datos, podré crear una historia completa con título, descripción y criterios de aceptación. 📋✨"
+
+Genera una respuesta similar adaptada a la situación actual.
+`;
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content: this.getSystemPrompt() + '\n\nMODO: Conversacional y guiado. NO ejecutes acciones, solo guía al usuario.'
+          },
+          {
+            role: 'user',
+            content: guidancePrompt
+          }
+        ],
+        temperature: 0.8, // Más creatividad para respuestas naturales
+        max_tokens: 500
+      });
+
+      const conversationalResponse = response.choices[0].message.content.trim();
+
+      return {
+        success: true,
+        response: conversationalResponse,
+        needs_more_context: true,
+        missing_data: missingData,
+        suggested_action: intent
+      };
+
+    } catch (error) {
+      console.error('❌ Error generando respuesta conversacional:', error);
+      
+      // Fallback: respuesta predeterminada
+      return {
+        success: true,
+        response: `Entiendo que quieres ${this.getIntentDescription(intent)}. Para ayudarte mejor, necesito:\n\n${missingData.map(d => `• ${d.message}`).join('\n')}\n\nCuando me proporciones estos datos, podré ayudarte con eso. 😊`,
+        needs_more_context: true,
+        missing_data: missingData,
+        suggested_action: intent
+      };
+    }
+  }
+
+  /**
+   * Obtiene descripción legible de un intent
+   */
+  getIntentDescription(intent) {
+    const descriptions = {
+      'create_user_story': 'crear una historia de usuario',
+      'refine_user_story': 'refinar una historia existente',
+      'prioritize_backlog': 'priorizar el backlog',
+      'analyze_backlog': 'analizar el backlog',
+      'generate_acceptance_criteria': 'generar criterios de aceptación',
+      'analyze_business_value': 'analizar el valor de negocio',
+      'suggest_sprint_goal': 'sugerir un objetivo de sprint',
+      'generate_stakeholder_report': 'generar un reporte para stakeholders'
+    };
+    return descriptions[intent] || intent;
+  }
+
+  /**
+   * RESPONDER PREGUNTA GENERAL
+   * Conversación natural sobre Scrum, metodologías, mejores prácticas
+   */
+  async answerGeneralQuestion(context, entities) {
+    console.log('💬 Respondiendo pregunta general sobre Scrum/Agile...');
+
+    const userQuestion = entities.originalMessage || 'Pregunta general sobre Scrum';
+
+    // Construir contexto del proyecto si está disponible
+    let projectContext = '';
+    if (context.backlog_stats) {
+      projectContext = `\n\nCONTEXTO DE TU PROYECTO:
+- Items en backlog: ${context.backlog_stats.total || 0}
+- Story points totales: ${context.backlog_stats.total_story_points || 0}
+- Productos activos: ${context.products?.length || 0}`;
+    }
+
+    const conversationalPrompt = `
+El usuario pregunta: "${userQuestion}"
+
+TU ROL: Eres SCRUM AI, un experto en Scrum y Agile con años de experiencia ayudando a equipos.
+
+INSTRUCCIONES:
+1. Responde de manera clara, educativa y práctica
+2. Usa ejemplos concretos cuando sea posible
+3. Si es una pregunta sobre Scrum, explica los conceptos fundamentales
+4. Si es sobre mejores prácticas, da consejos accionables
+5. Mantén un tono profesional pero amigable
+6. Si es relevante, menciona cómo se aplica en su proyecto actual
+7. Termina ofreciendo ayuda adicional si la necesitan
+8. NO uses formato JSON, responde en texto natural con markdown
+9. Usa emojis ocasionalmente para hacer la respuesta más amigable
+
+ESTRUCTURA SUGERIDA:
+- Respuesta directa a la pregunta
+- Explicación o contexto adicional
+- Ejemplo práctico (si aplica)
+- Consejo o recomendación
+- Oferta de ayuda adicional
+${projectContext}
+
+Genera una respuesta educativa y útil.
+`;
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content: this.getSystemPrompt() + '\n\nMODO: Conversacional educativo. NO ejecutes acciones, solo enseña y asesora.'
+          },
+          {
+            role: 'user',
+            content: conversationalPrompt
+          }
+        ],
+        temperature: 0.8,
+        max_tokens: 800 // Más espacio para respuestas educativas
+      });
+
+      const answer = response.choices[0].message.content.trim();
+
+      return {
+        success: true,
+        response: answer,
+        type: 'conversational',
+        is_educational: true
+      };
+
+    } catch (error) {
+      console.error('❌ Error respondiendo pregunta general:', error);
+      
+      // Fallback
+      return {
+        success: true,
+        response: `Como experto en Scrum, puedo ayudarte con esa pregunta. Sin embargo, necesito que me des más detalles o reformules tu pregunta para poder darte una respuesta más precisa. 
+
+¿Podrías ser más específico sobre qué aspecto de Scrum te interesa conocer? 🤔`,
+        type: 'conversational',
+        is_educational: true
+      };
     }
   }
 
@@ -605,8 +881,15 @@ Retorna JSON:
 
   /**
    * System prompt para OpenAI
+   * Si es sistema unificado (SCRUM AI), usa el prompt de la especialidad
    */
   getSystemPrompt() {
+    // Si hay especialidad (sistema unificado), usar su prompt
+    if (this.systemPrompt) {
+      return this.systemPrompt;
+    }
+    
+    // Fallback: prompt legacy de Product Owner
     return `Eres un Product Owner experto en metodologías ágiles y gestión de producto.
 
 Tu rol es ayudar a equipos de desarrollo a:

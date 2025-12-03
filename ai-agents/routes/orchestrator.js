@@ -245,6 +245,14 @@ router.post('/chat', authenticate, chatRateLimiter, async (req, res) => {
       req.user
     );
 
+    // 🔍 LOGGING ESTRATÉGICO: Ver qué responde el backend
+    console.log('\n📤 RESPUESTA AL FRONTEND:');
+    console.log('Status:', result.status);
+    console.log('Needs more context:', result.needs_more_context);
+    console.log('Response length:', result.response?.length || 0);
+    console.log('Response preview:', result.response?.substring(0, 100));
+    console.log('Full result keys:', Object.keys(result));
+
     // Determinar código de respuesta
     let statusCode = 200;
     if (result.status === 'error') {
@@ -417,6 +425,197 @@ router.post('/cache/invalidate', authenticate, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/ai-agents/orchestrator/conversations
+ * Obtiene historial de conversaciones del usuario
+ */
+router.get('/conversations', authenticate, async (req, res) => {
+  try {
+    const AgentSession = require('../models/AgentSession');
+    const Agent = require('../models/Agent');
+    
+    // Obtener todas las sesiones del usuario ordenadas por fecha
+    const sessions = await AgentSession.find({
+      user_id: req.user._id,
+      status: { $in: ['active', 'completed'] }
+    })
+    .populate('agent_id', 'name display_name type')
+    .populate('context.product_id', 'name')
+    .populate('context.sprint_id', 'name')
+    .sort({ updatedAt: -1 })
+    .limit(50);
+
+    // Formatear conversaciones para el frontend
+    const conversations = sessions.map(session => {
+      const lastMessage = session.messages.length > 0 
+        ? session.messages[session.messages.length - 1].content
+        : '';
+      
+      // Generar título basado en el primer mensaje del usuario
+      const firstUserMessage = session.messages.find(m => m.role === 'user');
+      const title = firstUserMessage 
+        ? firstUserMessage.content.substring(0, 50) + (firstUserMessage.content.length > 50 ? '...' : '')
+        : 'Conversación sin título';
+
+      return {
+        id: session.session_id,
+        _id: session._id,
+        title,
+        lastMessage: lastMessage.substring(0, 100),
+        messageCount: session.messages.length,
+        agent: session.agent_id ? {
+          name: session.agent_id.name,
+          display_name: session.agent_id.display_name,
+          type: session.agent_id.type
+        } : null,
+        context: {
+          product: session.context?.product_id?.name || null,
+          sprint: session.context?.sprint_id?.name || null
+        },
+        status: session.status,
+        createdAt: session.started_at,
+        updatedAt: session.updatedAt,
+        favorite: session.feedback?.rating >= 4 || false // Considerar favorito si rating >= 4
+      };
+    });
+
+    res.json(conversations);
+
+  } catch (error) {
+    console.error('Get conversations error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error al obtener conversaciones',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/ai-agents/orchestrator/conversations/:id
+ * Obtiene una conversación específica con todos sus mensajes
+ */
+router.get('/conversations/:id', authenticate, async (req, res) => {
+  try {
+    const AgentSession = require('../models/AgentSession');
+    
+    const session = await AgentSession.findOne({
+      session_id: req.params.id,
+      user_id: req.user._id
+    })
+    .populate('agent_id', 'name display_name type')
+    .populate('context.product_id', 'name')
+    .populate('context.sprint_id', 'name');
+
+    if (!session) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Conversación no encontrada'
+      });
+    }
+
+    res.json({
+      id: session.session_id,
+      messages: session.messages.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        metadata: msg.metadata
+      })),
+      context: session.context,
+      agent: session.agent_id,
+      status: session.status,
+      createdAt: session.started_at,
+      updatedAt: session.updatedAt
+    });
+
+  } catch (error) {
+    console.error('Get conversation error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error al obtener conversación',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/ai-agents/orchestrator/conversations/:id/favorite
+ * Marca/desmarca una conversación como favorita
+ */
+router.post('/conversations/:id/favorite', authenticate, async (req, res) => {
+  try {
+    const AgentSession = require('../models/AgentSession');
+    
+    const session = await AgentSession.findOne({
+      session_id: req.params.id,
+      user_id: req.user._id
+    });
+
+    if (!session) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Conversación no encontrada'
+      });
+    }
+
+    // Toggle favorito usando el rating
+    const currentRating = session.feedback?.rating || 0;
+    const newRating = currentRating >= 4 ? 3 : 5; // Si es favorito (>=4), quitar. Si no, poner 5.
+    
+    await session.addFeedback(newRating, session.feedback?.comment || '');
+
+    res.json({
+      status: 'success',
+      favorite: newRating >= 4,
+      message: newRating >= 4 ? 'Conversación marcada como favorita' : 'Conversación removida de favoritos'
+    });
+
+  } catch (error) {
+    console.error('Toggle favorite error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error al actualizar favorito',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /api/ai-agents/orchestrator/conversations/:id
+ * Elimina una conversación
+ */
+router.delete('/conversations/:id', authenticate, async (req, res) => {
+  try {
+    const AgentSession = require('../models/AgentSession');
+    
+    const result = await AgentSession.deleteOne({
+      session_id: req.params.id,
+      user_id: req.user._id
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Conversación no encontrada'
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Conversación eliminada correctamente'
+    });
+
+  } catch (error) {
+    console.error('Delete conversation error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Error al eliminar conversación',
+      error: error.message
     });
   }
 });

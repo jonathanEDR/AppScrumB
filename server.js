@@ -58,8 +58,11 @@ const systemConfigRoutes = require('./routes/systemConfig');  // Rutas de config
 const cloudinaryRoutes = require('./routes/cloudinary');  // Rutas de gestión de Cloudinary
 const profileRoutes = require('./routes/profile');  // Rutas de perfil/CV
 const scrumMasterRoutes = require('./routes/scrumMaster');  // Rutas de Scrum Master (Dashboard consolidado)
+const architectureRoutes = require('./routes/architecture');  // 🏗️ Rutas de Arquitectura de Proyectos
+const databaseSchemaRoutes = require('./routes/databaseSchema');  // 📊 Rutas de Database Schema (Módulo independiente)
 const aiAgentsRoutes = require('./ai-agents/routes/agents');  // 🤖 Rutas de AI Agents
 const orchestratorRoutes = require('./ai-agents/routes/orchestrator');  // 🎯 Rutas del Orquestador
+const scrumAIRoutes = require('./ai-agents/routes/scrumAI');  // 💬 Rutas de SCRUM AI Chat (directo, sin orquestador)
 
 const app = express();
 const port = process.env.PORT || 5000;  // Usar el puerto de la variable de entorno o el 5000 por defecto
@@ -220,8 +223,11 @@ app.use('/api/system-config', systemConfigRoutes);  // Rutas de configuración d
 app.use('/api/cloudinary', cloudinaryRoutes);  // Rutas de gestión de Cloudinary
 app.use('/api/profile', profileRoutes);  // Rutas de perfil/CV
 app.use('/api/scrum-master', scrumMasterRoutes);  // ✅ NUEVO: Dashboard consolidado Scrum Master
+app.use('/api/architecture', architectureRoutes);  // 🏗️ NUEVO: Arquitectura de Proyectos
+app.use('/api/database-schema', databaseSchemaRoutes);  // 📊 NUEVO: Database Schema (Módulo independiente)
 app.use('/api/ai-agents', aiAgentsRoutes);  // 🤖 NUEVO: Sistema de AI Agents
 app.use('/api/ai-agents/orchestrator', orchestratorRoutes);  // 🎯 NUEVO: Orquestador Principal
+app.use('/api/ai-agents/scrum-ai', scrumAIRoutes);  // 💬 NUEVO: SCRUM AI Chat directo
 
 // NOTA: Ya no servimos archivos estáticos locales, todo está en Cloudinary
 

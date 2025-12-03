@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 /**
  * Modelo AgentSession - Representa una sesión de conversación con un agente
  * Mantiene el historial de mensajes y contexto de la interacción
+ * 
+ * NOTA: agent_id es opcional para soportar SCRUM AI central sin agente específico
  */
 const AgentSessionSchema = new mongoose.Schema({
   session_id: {
@@ -14,8 +16,9 @@ const AgentSessionSchema = new mongoose.Schema({
   agent_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Agent',
-    required: true,
-    description: 'Agente involucrado en la sesión'
+    required: false, // Opcional para SCRUM AI central
+    default: null,
+    description: 'Agente involucrado en la sesión (opcional para SCRUM AI)'
   },
   user_id: {
     type: mongoose.Schema.Types.ObjectId,

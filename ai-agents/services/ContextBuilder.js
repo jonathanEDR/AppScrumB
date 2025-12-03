@@ -8,6 +8,7 @@ const BacklogItem = require('../../models/BacklogItem');
 const Sprint = require('../../models/Sprint');
 const User = require('../../models/User');
 const SystemConfig = require('../../models/SystemConfig');
+const ProjectArchitecture = require('../../models/ProjectArchitecture');
 const contextCache = require('./ContextCache');
 
 class ContextBuilder {
@@ -29,7 +30,8 @@ class ContextBuilder {
         },
         timestamp: new Date().toISOString(),
         intent: intent,
-        entities: entities
+        entities: entities,
+        original_message: entities.originalMessage || ''
       };
 
       // Cargar producto si está especificado
@@ -39,6 +41,17 @@ class ContextBuilder {
         // Si solo hay un producto, cargarlo como principal
         if (context.products.length === 1) {
           context.primary_product = context.products[0];
+        }
+      } else if (this.needsProductContext(intent)) {
+        // ✅ Si no hay producto especificado pero la acción lo necesita, cargar todos
+        context.products = await this.loadAllUserProducts(user._id || user.id);
+      }
+
+      // 🏗️ Cargar arquitectura si es necesario
+      if (this.needsArchitectureContext(intent)) {
+        const productId = entities.product_ids?.[0] || context.products?.[0]?._id;
+        if (productId) {
+          context.architecture = await this.loadProjectArchitecture(productId);
         }
       }
 
@@ -88,6 +101,48 @@ class ContextBuilder {
       'estimate_story',
       'analyze_business_value',
       'suggest_improvements'
+    ].includes(intent);
+  }
+
+  /**
+   * Determina si la intención necesita contexto de productos
+   */
+  static needsProductContext(intent) {
+    return [
+      'create_user_story',
+      'prioritize_backlog',
+      'analyze_backlog',
+      'suggest_sprint_goal',
+      'plan_sprint',
+      // 🏗️ Intents de arquitectura
+      'define_architecture',
+      'analyze_architecture',
+      'create_module',
+      'update_module',
+      'list_modules',
+      'generate_roadmap'
+    ].includes(intent);
+  }
+
+  /**
+   * 🏗️ Determina si la intención necesita contexto de arquitectura
+   */
+  static needsArchitectureContext(intent) {
+    return [
+      'define_architecture',
+      'analyze_architecture',
+      'suggest_tech_stack',
+      'create_module',
+      'update_module',
+      'list_modules',
+      'generate_roadmap',
+      'document_decision',
+      'estimate_complexity',
+      'link_story_to_module',
+      'architecture_question',
+      // También cargar arquitectura para contexto en historias
+      'create_user_story',
+      'plan_sprint'
     ].includes(intent);
   }
 
@@ -144,6 +199,83 @@ class ContextBuilder {
       return products;
     } catch (error) {
       console.error('ContextBuilder.loadProducts error:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Carga la arquitectura del proyecto para los productos especificados
+   */
+  static async loadProjectArchitecture(productIds) {
+    try {
+      if (!productIds || productIds.length === 0) {
+        return null;
+      }
+
+      const productId = productIds[0]; // Arquitectura asociada al primer producto
+
+      // Buscar arquitectura del producto
+      const architecture = await ProjectArchitecture.findOne({ 
+        product: productId 
+      }).lean();
+
+      if (!architecture) {
+        return null;
+      }
+
+      // Formatear para contexto AI (nombres alineados con modelo ProjectArchitecture)
+      return {
+        id: architecture._id,
+        product: productId,
+        project_name: architecture.project_name || '',
+        project_type: architecture.project_type || 'web_app',
+        scale: architecture.scale || 'mvp',
+        tech_stack: architecture.tech_stack || {},
+        modules: architecture.modules || [],
+        // NOTA: database_schema ahora se maneja en el módulo independiente DatabaseSchema
+        api_endpoints: architecture.api_endpoints || [],
+        integrations: architecture.integrations || [],
+        architecture_decisions: architecture.architecture_decisions || [],
+        architecture_patterns: architecture.architecture_patterns || [], // ✅ Nombre correcto del modelo
+        security: architecture.security || {},
+        technical_roadmap: architecture.technical_roadmap || [],        // ✅ Nombre correcto del modelo
+        directory_structure: architecture.directory_structure || null,
+        coding_standards: architecture.coding_standards || {},
+        completeness_score: architecture.completeness_score || 0,
+        status: architecture.status || 'draft',
+        hasArchitecture: true,
+        summary: {
+          totalModules: (architecture.modules || []).length,
+          totalEndpoints: (architecture.api_endpoints || []).length,
+          totalPatterns: (architecture.architecture_patterns || []).length,
+          hasFrontend: !!architecture.tech_stack?.frontend?.framework,
+          hasBackend: !!architecture.tech_stack?.backend?.framework,
+          hasDatabase: !!architecture.tech_stack?.database?.primary,
+          hasRoadmap: (architecture.technical_roadmap || []).length > 0
+        }
+      };
+    } catch (error) {
+      console.error('ContextBuilder.loadProjectArchitecture error:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Carga TODOS los productos del usuario (para ofrecer opciones)
+   */
+  static async loadAllUserProducts(userId) {
+    try {
+      const products = await Product.find({ 
+        is_active: true 
+      })
+        .select('_id nombre descripcion') // Solo info básica
+        .sort({ nombre: 1 })
+        .limit(20) // Máximo 20 productos
+        .lean();
+
+      return products;
+    } catch (error) {
+      console.error('ContextBuilder.loadAllUserProducts error:', error);
       return [];
     }
   }

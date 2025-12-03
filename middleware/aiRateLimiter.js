@@ -18,7 +18,7 @@ const createAIRateLimiter = () => {
   // Configuración base
   const config = {
     windowMs: 60 * 60 * 1000, // 1 hora
-    max: 10, // 10 requests por hora
+    max: process.env.NODE_ENV === 'production' ? 10 : 100, // 100 en desarrollo, 10 en producción
     standardHeaders: true,
     legacyHeaders: false,
     
@@ -55,9 +55,9 @@ const createAIRateLimiter = () => {
       return req.user?._id?.toString() || 'anonymous';
     },
 
-    // Skip para usuarios admin
+    // Skip para usuarios admin y super_admin
     skip: (req) => {
-      return req.user?.role === 'admin';
+      return req.user?.role === 'admin' || req.user?.role === 'super_admin';
     }
   };
 
@@ -110,7 +110,7 @@ const createDailyAIRateLimiter = () => {
     },
 
     skip: (req) => {
-      return req.user?.role === 'admin';
+      return req.user?.role === 'admin' || req.user?.role === 'super_admin';
     }
   };
 
@@ -131,7 +131,7 @@ const createDailyAIRateLimiter = () => {
 const createChatRateLimiter = () => {
   const config = {
     windowMs: 60 * 60 * 1000, // 1 hora
-    max: 30, // 30 mensajes por hora
+    max: process.env.NODE_ENV === 'production' ? 30 : 200, // 200 en desarrollo, 30 en producción
     standardHeaders: true,
     legacyHeaders: false,
     
@@ -140,7 +140,7 @@ const createChatRateLimiter = () => {
       message: 'Límite de mensajes de chat excedido',
       retry_after: '1 hora',
       limits: {
-        hourly: '30 mensajes/hora'
+        hourly: process.env.NODE_ENV === 'production' ? '30 mensajes/hora' : '200 mensajes/hora'
       }
     },
 
@@ -150,7 +150,7 @@ const createChatRateLimiter = () => {
     },
 
     skip: (req) => {
-      return req.user?.role === 'admin';
+      return req.user?.role === 'admin' || req.user?.role === 'super_admin';
     }
   };
 

@@ -60,6 +60,7 @@
     "node-cache": "^5.1.2",
     "openai": "^6.9.1",
     "rate-limit-mongo": "^2.3.2",
+    "react-markdown": "^10.1.0",
     "winston": "^3.18.3",
     "winston-daily-rotate-file": "^5.0.0"
   },
