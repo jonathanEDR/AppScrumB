@@ -7,7 +7,8 @@
 const Product = require('../models/Product');
 const BacklogItem = require('../models/BacklogItem');
 const User = require('../models/User');
-const { Sprint, Release } = require('../models/Sprint');
+const Sprint = require('../models/Sprint');
+const Release = require('../models/Release');
 
 class ProductService {
   /**
