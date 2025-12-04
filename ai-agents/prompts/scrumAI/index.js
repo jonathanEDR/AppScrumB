@@ -10,6 +10,7 @@ const { BASE_PERSONALITY, GENERAL_RULES } = require('./basePrompt');
 const { ARCHITECTURE_CREATE_PROMPT, ARCHITECTURE_EDIT_PROMPT } = require('./architecturePrompts');
 const { DATABASE_EDIT_PROMPT, ENDPOINT_EDIT_PROMPT, JSON_EXAMPLES } = require('./editingPrompts');
 const { CANVAS_RULES } = require('./canvasPrompts');
+const { STORY_CREATION_PROMPT, SPRINT_CREATION_PROMPT, GUIDED_CREATION_FLOW, TECHNICAL_ITEMS_PROMPT } = require('./creationPrompts');
 
 /**
  * Construye el system prompt completo combinando todas las partes
@@ -17,6 +18,14 @@ const { CANVAS_RULES } = require('./canvasPrompts');
  */
 function buildSystemPrompt() {
   return `${BASE_PERSONALITY}
+
+${STORY_CREATION_PROMPT}
+
+${SPRINT_CREATION_PROMPT}
+
+${TECHNICAL_ITEMS_PROMPT}
+
+${GUIDED_CREATION_FLOW}
 
 ${ARCHITECTURE_CREATE_PROMPT}
 
@@ -56,5 +65,9 @@ module.exports = {
   ENDPOINT_EDIT_PROMPT,
   JSON_EXAMPLES,
   CANVAS_RULES,
-  GENERAL_RULES
+  GENERAL_RULES,
+  STORY_CREATION_PROMPT,
+  SPRINT_CREATION_PROMPT,
+  GUIDED_CREATION_FLOW,
+  TECHNICAL_ITEMS_PROMPT
 };

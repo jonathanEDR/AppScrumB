@@ -154,19 +154,75 @@ router.post('/chat', authenticate, chatRateLimiter, async (req, res) => {
     
     // Agregar contexto del producto
     let contextInfo = '';
-    if (context?.product_id && context?.product_name) {
-      contextInfo = `\n[PRODUCTO SELECCIONADO]: ${context.product_name} (ID: ${context.product_id})`;
+    
+    // ✅ MEJORADO: Obtener producto del sprint si no viene en el contexto
+    let effectiveProductId = context?.product_id;
+    let effectiveProductName = context?.product_name;
+    
+    if (!effectiveProductId && context?.sprint_id) {
+      try {
+        const Sprint = require('../../models/Sprint');
+        const sprint = await Sprint.findById(context.sprint_id).populate('producto', 'nombre _id').lean();
+        if (sprint?.producto) {
+          effectiveProductId = sprint.producto._id || sprint.producto;
+          effectiveProductName = sprint.producto.nombre || 'Producto del Sprint';
+          console.log('📦 Producto obtenido del sprint:', effectiveProductName);
+        }
+      } catch (err) {
+        console.error('❌ Error obteniendo producto del sprint:', err);
+      }
+    }
+    
+    if (effectiveProductId && effectiveProductName) {
+      contextInfo = `\n[PRODUCTO SELECCIONADO]: ${effectiveProductName} (ID: ${effectiveProductId})`;
+      
+      // Agregar contexto del sprint si está seleccionado
+      if (context?.sprint_id && context?.sprint_name) {
+        console.log('🏃 Sprint seleccionado:', context.sprint_id, context.sprint_name);
+        contextInfo += `\n[SPRINT SELECCIONADO]: ${context.sprint_name} (ID: ${context.sprint_id})`;
+        if (context.sprint_objetivo) {
+          contextInfo += `\n[OBJETIVO DEL SPRINT]: ${context.sprint_objetivo}`;
+        }
+        
+        // Cargar historias asociadas al sprint
+        try {
+          const BacklogItem = require('../../models/BacklogItem');
+          console.log('📚 Buscando historias para sprint:', context.sprint_id);
+          const sprintStories = await BacklogItem.find({
+            sprint: context.sprint_id,
+            tipo: 'historia'
+          }).select('titulo descripcion estado prioridad puntos_historia').lean();
+          
+          console.log('📚 Historias encontradas:', sprintStories?.length || 0);
+          
+          if (sprintStories && sprintStories.length > 0) {
+            contextInfo += `\n[HISTORIAS DEL SPRINT]: ${sprintStories.length} historia(s)`;
+            sprintStories.forEach((story, index) => {
+              contextInfo += `\n  ${index + 1}. "${story.titulo}" (ID: ${story._id}) - ${story.estado} - ${story.puntos_historia || 0} pts`;
+            });
+            contextInfo += `\n[INSTRUCCIÓN IMPORTANTE]: Cuando el usuario quiera crear una tarea, bug o mejora, PRIMERO muéstrale esta lista de historias y pregúntale a cuál quiere asociar el item.`;
+          } else {
+            contextInfo += `\n[HISTORIAS DEL SPRINT]: No hay historias asignadas a este sprint.`;
+            contextInfo += `\n[NOTA]: Puedes crear tareas independientes para el sprint o sugerir crear historias primero.`;
+          }
+        } catch (err) {
+          console.error('❌ Error cargando historias del sprint:', err);
+          contextInfo += `\n[NOTA]: Al crear tareas, bugs o mejoras, asócialas automáticamente a este sprint.`;
+        }
+      } else {
+        console.log('⚠️ No hay sprint seleccionado en el contexto');
+      }
       
       // Si es intent de edición de arquitectura
       if (canvasIntent?.action === 'edit') {
-        const existingArch = await checkExistingArchitecture(context.product_id);
+        const existingArch = await checkExistingArchitecture(effectiveProductId);
         
         if (existingArch.exists) {
           contextInfo += `\n[ARQUITECTURA EXISTENTE]: Sí`;
           contextInfo += `\n[RESUMEN]: ${existingArch.summary.modules} módulos, ${existingArch.summary.tables} tablas, ${existingArch.summary.endpoints} endpoints`;
           
           if (canvasIntent.section) {
-            const sectionData = await getArchitectureSection(context.product_id, canvasIntent.section);
+            const sectionData = await getArchitectureSection(effectiveProductId, canvasIntent.section);
             if (sectionData?.data) {
               contextInfo += `\n[SECCIÓN A EDITAR]: ${sectionData.title}`;
               const charLimit = ['database', 'endpoints'].includes(canvasIntent.section) ? 4000 : 2500;
@@ -228,17 +284,24 @@ router.post('/chat', authenticate, chatRateLimiter, async (req, res) => {
     
     let architectureSaveResult = null;
     
+    // ✅ MEJORADO: Crear contexto efectivo con el producto correcto
+    const effectiveContext = {
+      ...context,
+      product_id: effectiveProductId,
+      product_name: effectiveProductName
+    };
+    
     // Detectar si es actualización de sección
     const isArchitectureUpdateMarker = canvasMarkerMatch && 
       canvasMarkerMatch[1] === 'architecture' && 
       canvasMarkerMatch[2] === 'update';
     const hasUpdateJson = response.includes('```json') && response.includes('"section"');
-    const shouldUpdateArchitectureSection = (isArchitectureUpdateMarker || hasUpdateJson) && context?.product_id;
+    const shouldUpdateArchitectureSection = (isArchitectureUpdateMarker || hasUpdateJson) && effectiveProductId;
     
     if (shouldUpdateArchitectureSection) {
-      architectureSaveResult = await processArchitectureUpdate(response, context, req.user._id);
+      architectureSaveResult = await processArchitectureUpdate(response, effectiveContext, req.user._id);
       if (architectureSaveResult?.saved) {
-        canvasData = await getCanvasData('architecture', req.user._id, context || {});
+        canvasData = await getCanvasData('architecture', req.user._id, effectiveContext || {});
       }
     }
 
@@ -254,12 +317,12 @@ router.post('/chat', authenticate, chatRateLimiter, async (req, res) => {
     const shouldSaveArchitecture = !architectureSaveResult?.saved && 
       canvasIntent?.action !== 'edit' &&
       (hasArchitectureMarker || hasArchitectureJson) && 
-      context?.product_id;
+      effectiveProductId;
     
     if (shouldSaveArchitecture) {
-      architectureSaveResult = await processArchitectureCreate(response, context, req.user._id);
+      architectureSaveResult = await processArchitectureCreate(response, effectiveContext, req.user._id);
       if (architectureSaveResult?.saved) {
-        canvasData = await getCanvasData('architecture', req.user._id, context || {});
+        canvasData = await getCanvasData('architecture', req.user._id, effectiveContext || {});
       }
     }
 

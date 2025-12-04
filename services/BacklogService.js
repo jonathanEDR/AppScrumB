@@ -193,6 +193,86 @@ class BacklogService {
   }
 
   /**
+   * Crear MÚLTIPLES items técnicos en batch (tareas, bugs, mejoras) - Solo Scrum Master
+   * @param {Array} itemsData - Array de items a crear
+   * @param {string} userId - ID del usuario que crea
+   * @returns {Object} Resultado con items creados y errores
+   */
+  static async createTechnicalItemsBatch(itemsData, userId) {
+    const allowedTypes = ['tarea', 'bug', 'mejora'];
+    const results = {
+      success: true,
+      created: [],
+      failed: [],
+      created_count: 0,
+      failed_count: 0
+    };
+    
+    console.log(`📦 [BATCH SERVICE] Procesando ${itemsData.length} items`);
+    
+    for (let i = 0; i < itemsData.length; i++) {
+      const itemData = itemsData[i];
+      
+      try {
+        // Validar tipo
+        if (!allowedTypes.includes(itemData.tipo)) {
+          results.failed.push({
+            index: i,
+            titulo: itemData.titulo || `Item ${i + 1}`,
+            error: `Tipo inválido: ${itemData.tipo}. Permitidos: ${allowedTypes.join(', ')}`
+          });
+          results.failed_count++;
+          continue;
+        }
+        
+        // Crear el item
+        const result = await this.createBacklogItem(itemData, userId, { allowedTypes });
+        
+        if (result.success) {
+          results.created.push({
+            index: i,
+            _id: result.item._id,
+            titulo: result.item.titulo,
+            tipo: result.item.tipo
+          });
+          results.created_count++;
+          console.log(`  ✅ [${i + 1}/${itemsData.length}] ${result.item.titulo}`);
+        } else {
+          results.failed.push({
+            index: i,
+            titulo: itemData.titulo || `Item ${i + 1}`,
+            error: result.error
+          });
+          results.failed_count++;
+          console.log(`  ❌ [${i + 1}/${itemsData.length}] Error: ${result.error}`);
+        }
+      } catch (error) {
+        results.failed.push({
+          index: i,
+          titulo: itemData.titulo || `Item ${i + 1}`,
+          error: error.message
+        });
+        results.failed_count++;
+        console.error(`  ❌ [${i + 1}/${itemsData.length}] Exception:`, error.message);
+      }
+    }
+    
+    // Si todos fallaron, marcar como no exitoso
+    if (results.created_count === 0 && results.failed_count > 0) {
+      results.success = false;
+      results.message = 'No se pudo crear ningún item';
+    } else if (results.failed_count > 0) {
+      results.message = `${results.created_count} items creados, ${results.failed_count} fallaron`;
+    } else {
+      results.message = `${results.created_count} items creados exitosamente`;
+    }
+    
+    console.log(`📦 [BATCH SERVICE] Resultado: ${results.created_count} creados, ${results.failed_count} fallidos`);
+    
+    return results;
+  }
+
+  /**
    * Actualizar un item del backlog
    */
   static async updateBacklogItem(itemId, updates, userId) {

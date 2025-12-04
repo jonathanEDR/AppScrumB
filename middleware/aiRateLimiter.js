@@ -131,7 +131,7 @@ const createDailyAIRateLimiter = () => {
 const createChatRateLimiter = () => {
   const config = {
     windowMs: 60 * 60 * 1000, // 1 hora
-    max: process.env.NODE_ENV === 'production' ? 30 : 200, // 200 en desarrollo, 30 en producción
+    max: process.env.NODE_ENV === 'production' ? 30 : 1000, // 1000 en desarrollo, 30 en producción
     standardHeaders: true,
     legacyHeaders: false,
     
@@ -140,7 +140,7 @@ const createChatRateLimiter = () => {
       message: 'Límite de mensajes de chat excedido',
       retry_after: '1 hora',
       limits: {
-        hourly: process.env.NODE_ENV === 'production' ? '30 mensajes/hora' : '200 mensajes/hora'
+        hourly: process.env.NODE_ENV === 'production' ? '30 mensajes/hora' : '1000 mensajes/hora'
       }
     },
 
@@ -150,7 +150,22 @@ const createChatRateLimiter = () => {
     },
 
     skip: (req) => {
-      return req.user?.role === 'admin' || req.user?.role === 'super_admin';
+      // Skip para admins
+      const isAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin';
+      
+      // Skip para localhost (desarrollo local)
+      const isLocalhost = req.hostname === 'localhost' || req.ip === '127.0.0.1' || req.ip === '::1';
+      
+      // Skip para PO y SM en desarrollo
+      const isProductOwner = req.user?.role === 'product_owner';
+      const isScrumMaster = req.user?.role === 'scrum_master';
+      
+      // Si es localhost, dar más libertad
+      if (isLocalhost && (isProductOwner || isScrumMaster || isAdmin)) {
+        return true;
+      }
+      
+      return isAdmin;
     }
   };
 

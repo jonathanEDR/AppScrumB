@@ -314,7 +314,12 @@ async function getSprintsData(context) {
       estado: s.estado,
       fecha_inicio: s.fecha_inicio,
       fecha_fin: s.fecha_fin,
-      producto: s.producto?.nombre || 'Sin producto',
+      // Mantener el objeto producto completo para poder seleccionarlo
+      producto: s.producto ? { 
+        _id: s.producto._id, 
+        nombre: s.producto.nombre 
+      } : null,
+      producto_nombre: s.producto?.nombre || 'Sin producto', // Para mostrar en UI
       progreso: s.progreso || 0,
       velocidad_planificada: s.velocidad_planificada,
       velocidad_real: s.velocidad_real

@@ -71,6 +71,42 @@ router.post('/backlog/technical', authenticate, requireScrumMasterOrAbove, async
   }
 });
 
+// Endpoint para crear MÚLTIPLES tareas técnicas en batch
+router.post('/backlog/technical/batch', authenticate, requireScrumMasterOrAbove, async (req, res) => {
+  try {
+    const { items } = req.body;
+    
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Se requiere un array de items para crear' 
+      });
+    }
+    
+    if (items.length > 10) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Máximo 10 items por batch' 
+      });
+    }
+    
+    console.log(`📦 [BATCH] Creando ${items.length} items técnicos`);
+    
+    const result = await BacklogService.createTechnicalItemsBatch(items, req.user._id);
+    
+    if (!result.success) {
+      return res.status(400).json({ message: result.error, ...result });
+    }
+    
+    console.log(`✅ [BATCH] ${result.created_count} items creados exitosamente`);
+    
+    res.status(201).json(result);
+  } catch (error) {
+    console.error('Error creando items técnicos en batch:', error);
+    res.status(500).json({ message: 'Error al crear items técnicos', error: error.message });
+  }
+});
+
 // Actualizar item del backlog
 router.put('/backlog/:id', authenticate, requireProductOwnerOrAbove, async (req, res) => {
   try {
